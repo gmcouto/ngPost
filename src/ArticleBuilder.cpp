@@ -22,6 +22,7 @@
 #include "NgPost.h"
 #include "PostingJob.h"
 #include "nntp/NntpArticle.h"
+#include "utils/Yenc.h"
 
 ArticleBuilder::ArticleBuilder(Poster *poster, QObject *parent):
     QObject (parent),
@@ -45,7 +46,24 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
     _job->_secureDiskAccess.unlock();
     if (article)
     {
-        article->yEncBody(_buffer);
+        QString error;
+        YencEncryptionContext encryption;
+        const YencEncryptionContext *encryptionPtr = nullptr;
+        if(_job->_encryptionEnabled)
+        {
+            encryption.bodyKey = _job->_encryptionKeys.bodyKey;
+            encryption.masterKey = _job->_encryptionKeys.masterKey;
+            encryption.salt = _job->_encryptionSalt;
+            encryption.segmentIndex = article->segmentIndex();
+            encryptionPtr = &encryption;
+        }
+        if(!article->yEncBody(_buffer, encryptionPtr, &error))
+        {
+            _job->_error(QStringLiteral("Unable to encode article: %1").arg(error));
+            _job->_finishPosting();
+            emit _job->postingFinished();
+            return nullptr;
+        }
 #ifdef __SAVE_ARTICLES__
         article->dumpToFile("/tmp", _ngPost->aticleSignature());
 #endif

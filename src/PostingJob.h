@@ -20,6 +20,7 @@
 #ifndef POSTINGJOB_H
 #define POSTINGJOB_H
 #include "utils/Macros.h"
+#include "crypto/CryptoEngine.h"
 
 #include <QFileInfoList>
 #include <QVector>
@@ -39,6 +40,23 @@ class PostingWidget;
 class Poster;
 
 using AtomicBool = QAtomicInteger<unsigned short>; // 16 bit only (faster than using 8 bit variable...)
+
+class SegmentIndexAllocator
+{
+private:
+    quint32 _next;
+
+public:
+    SegmentIndexAllocator() : _next(1) {}
+
+    bool next(quint32 &segmentIndex)
+    {
+        if(_next == 0)
+            return false;
+        segmentIndex = _next++;
+        return true;
+    }
+};
 
 /*!
  * \brief PostingJob is an active object that will do a posting job
@@ -128,7 +146,11 @@ private:
 
     const bool _obfuscateArticles;
     const bool _obfuscateFileName;
-
+    const bool _encryptionEnabled;
+    QByteArray _encryptionSalt;
+    CryptoKeys _encryptionKeys;
+    SegmentIndexAllocator _segmentIndices;
+    QString _encryptionError;
 
     AtomicBool  _delFilesAfterPost;
     const QFileInfoList _originalFiles;
@@ -183,7 +205,8 @@ public:
                bool keepRar = false,
                bool delFilesAfterPost = false,
                bool overwriteNzb = true,
-               QObject *parent = nullptr);
+               QObject *parent = nullptr,
+               const QString &encryptionPassword = QString());
     ~PostingJob();
 
 

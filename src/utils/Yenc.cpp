@@ -21,6 +21,20 @@
 
 #include "Yenc.h"
 
+#include "crypto/CryptoEngine.h"
+#include "crypto/FF1Cipher.h"
+
+#include <limits>
+
+namespace
+{
+void setError(QString *error, const QString &message)
+{
+    if(error)
+        *error = message;
+}
+}
+
 quint32 Yenc::crc32_tab[] = {
     0x00000000, 0x77073096, 0xee0e612c, 0x990951ba, 0x076dc419, 0x706af48f,
     0xe963a535, 0x9e6495a3, 0x0edb8832, 0x79dcb8a4, 0xe0d5e91e, 0x97d2d988,
@@ -136,4 +150,80 @@ qint64 Yenc::encode(const char data[], qint64 dataSize, uchar encbuffer[], quint
     crc32 ^= 0xFFFFFFFF;
 
     return encSize;
+}
+
+bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 totalParts,
+                         qint64 fileSize, qint64 filePosition, const QByteArray &fileName,
+                         const YencEncryptionContext *encryption, QByteArray &article,
+                         quint32 &wireCrc32, QString *error)
+{
+    article.clear();
+    wireCrc32 = 0;
+    if(part == 0 || totalParts == 0 || part > totalParts || fileSize < 0 || filePosition < 0
+            || plaintext.size() > std::numeric_limits<qint64>::max() - filePosition
+            || filePosition + plaintext.size() > fileSize)
+    {
+        setError(error, QStringLiteral("Invalid yEnc article geometry"));
+        return false;
+    }
+
+    QByteArray wirePayload = plaintext;
+    QByteArray encryptionLine;
+    if(encryption)
+    {
+        if(encryption->salt.size() != 16 || encryption->segmentIndex == 0)
+        {
+            setError(error, QStringLiteral("Invalid encryption context"));
+            return false;
+        }
+        BodyEncryptionResult encrypted;
+        if(!CryptoEngine::encryptBody(plaintext, encryption->bodyKey, encryption->segmentIndex,
+                                      encrypted, error))
+            return false;
+        wirePayload = encrypted.ciphertext;
+        encryptionLine = QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
+                + encryption->salt.toHex() + QByteArrayLiteral(" tag=") + encrypted.tag.toHex();
+    }
+
+    if(wirePayload.size() > (std::numeric_limits<int>::max() - 4) / 2)
+    {
+        setError(error, QStringLiteral("yEnc article payload is too large"));
+        return false;
+    }
+    QByteArray encoded(wirePayload.size() * 2 + 4, Qt::Uninitialized);
+    const qint64 encodedSize = encode(wirePayload.constData(), wirePayload.size(),
+                                      reinterpret_cast<uchar *>(encoded.data()), wireCrc32);
+    if(encodedSize <= 0)
+    {
+        setError(error, QStringLiteral("Unable to yEnc encode article payload"));
+        return false;
+    }
+    encoded.resize(static_cast<int>(encodedSize - 1));
+
+    article = QByteArrayLiteral("=ybegin part=") + QByteArray::number(part)
+            + QByteArrayLiteral(" total=") + QByteArray::number(totalParts)
+            + QByteArrayLiteral(" line=128 size=") + QByteArray::number(fileSize)
+            + QByteArrayLiteral(" name=") + fileName + QByteArrayLiteral("\r\n")
+            + QByteArrayLiteral("=ypart begin=") + QByteArray::number(filePosition + 1)
+            + QByteArrayLiteral(" end=") + QByteArray::number(filePosition + plaintext.size())
+            + QByteArrayLiteral("\r\n");
+    if(!encryptionLine.isEmpty())
+        article += encryptionLine + QByteArrayLiteral("\r\n");
+    article += encoded + QByteArrayLiteral("\r\n=yend size=") + QByteArray::number(wirePayload.size())
+            + QByteArrayLiteral(" pcrc32=") + QByteArray::number(wireCrc32, 16).rightJustified(8, '0')
+            + QByteArrayLiteral("\r\n");
+
+    if(encryption)
+    {
+        QByteArray encryptedControls;
+        if(!FF1Cipher::encryptControlLines(article, encryption->masterKey, encryption->segmentIndex,
+                                           encryption->salt, encryptedControls, error))
+        {
+            article.clear();
+            wireCrc32 = 0;
+            return false;
+        }
+        article = encryptedControls;
+    }
+    return true;
 }

@@ -29,8 +29,8 @@
 ushort NntpArticle::sNbMaxTrySending = 5;
 
 NntpArticle::NntpArticle(NntpFile *file, uint part, qint64 pos, qint64 bytes,
-                         const std::string *from, bool obfuscation):
-    _nntpFile(file), _part(part),
+                         const std::string *from, bool obfuscation, quint32 segmentIndex):
+    _nntpFile(file), _part(part), _segmentIndex(segmentIndex),
     _id(QUuid::createUuid()),
     _from(from),
     _subject(nullptr),
@@ -54,27 +54,27 @@ NntpArticle::NntpArticle(NntpFile *file, uint part, qint64 pos, qint64 bytes,
     }
 }
 
-void NntpArticle::yEncBody(const char data[])
+bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encryption, QString *error)
 {
-    // do the yEnc encoding
-    quint32 crc32    = 0xFFFFFFFF;
-    uchar  *yencBody = new uchar[_fileBytes*2];
-    Yenc::encode(data, _fileBytes, yencBody, crc32);
+    if(encryption && encryption->segmentIndex != _segmentIndex)
+    {
+        if(error)
+            *error = QStringLiteral("Article segment index does not match encryption context");
+        return false;
+    }
 
-    // format the body
-    std::stringstream ss;
-    ss << "=ybegin part=" << _part << " total=" << _nntpFile->nbArticles() << " line=128"
-       << " size=" << _nntpFile->fileSize() << " name=" << _nntpFile->fileName() << Nntp::ENDLINE
-       << "=ypart begin=" << _filePos + 1 << " end=" << _filePos + _fileBytes << Nntp::ENDLINE
-       << yencBody << Nntp::ENDLINE
-       << "=yend size=" << _fileBytes << " pcrc32=" << std::hex << crc32 << Nntp::ENDLINE
-       << "." << Nntp::ENDLINE;
-
-    delete[] yencBody;
-
-    std::string body = ss.str();
-    _body = new char[body.length()+1];
-    std::strcpy(_body, body.c_str());
+    QByteArray block;
+    quint32 crc32 = 0;
+    if(!Yenc::encodeArticle(QByteArray(data, static_cast<int>(_fileBytes)), _part,
+                            _nntpFile->nbArticles(), _nntpFile->fileSize(), _filePos,
+                            QByteArray::fromStdString(_nntpFile->fileName()), encryption,
+                            block, crc32, error))
+        return false;
+    block += QByteArrayLiteral(".\r\n");
+    _body = new char[block.size() + 1];
+    std::memcpy(_body, block.constData(), static_cast<size_t>(block.size()));
+    _body[block.size()] = '\0';
+    return true;
 }
 
 NntpArticle::~NntpArticle()
