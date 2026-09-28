@@ -1,0 +1,89 @@
+#include <QtTest>
+
+#include "EncryptionSettings.h"
+#include "nntp/NzbWriter.h"
+
+class NzbTest : public QObject
+{
+    Q_OBJECT
+
+private slots:
+    void encryptedHeadIncludesTransportMetadata();
+    void ordinaryHeadPreservesArchiveMetadata();
+    void encryptedSegmentsIncludeExplicitIndices();
+    void ordinarySegmentsRemainUnchanged();
+    void validatesEncryptionSettings();
+};
+
+void NzbTest::encryptedHeadIncludesTransportMetadata()
+{
+    QMap<QString, QString> meta;
+    meta.insert(QStringLiteral("category"), QStringLiteral("test"));
+    meta.insert(QStringLiteral("password"), QStringLiteral("archive-pass"));
+    meta.insert(QStringLiteral("YENC_ENCRYPTED"), QStringLiteral("false"));
+    QString xml;
+    QTextStream stream(&xml);
+    NzbWriter::writeHead(stream, QStringLiteral("  "), meta, QStringLiteral("archive-pass"),
+                         QStringLiteral("transport<&\"pass"));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"yenc_encrypted\">true</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">transport&lt;&amp;&quot;pass</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
+    QVERIFY(!xml.contains(QStringLiteral("archive-pass")));
+    QCOMPARE(xml.count(QStringLiteral("yenc_encrypted")), 1);
+}
+
+void NzbTest::ordinaryHeadPreservesArchiveMetadata()
+{
+    QMap<QString, QString> meta;
+    meta.insert(QStringLiteral("category"), QStringLiteral("test"));
+    QString xml;
+    QTextStream stream(&xml);
+    NzbWriter::writeHead(stream, QStringLiteral("  "), meta, QStringLiteral("archive<&\"pass"));
+    QVERIFY(!xml.contains(QStringLiteral("yenc_encrypted")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">archive&lt;&amp;&quot;pass</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
+}
+
+void NzbTest::encryptedSegmentsIncludeExplicitIndices()
+{
+    QString xml;
+    QTextStream stream(&xml);
+    NzbWriter::writeSegment(stream, QStringLiteral("      "), 4, 1,
+                            QStringLiteral("one@example.invalid"), 1);
+    NzbWriter::writeSegment(stream, QStringLiteral("      "), 4, 2,
+                            QStringLiteral("two<&@example.invalid"), 2);
+    QVERIFY(xml.contains(QStringLiteral("<segment bytes=\"4\" number=\"1\" segmentIndex=\"1\">one@example.invalid</segment>")));
+    QVERIFY(xml.contains(QStringLiteral("<segment bytes=\"4\" number=\"2\" segmentIndex=\"2\">two&lt;&amp;@example.invalid</segment>")));
+}
+
+void NzbTest::ordinarySegmentsRemainUnchanged()
+{
+    QString xml;
+    QTextStream stream(&xml);
+    NzbWriter::writeSegment(stream, QStringLiteral("      "), 4, 1,
+                            QStringLiteral("plain@example.invalid"));
+    QCOMPARE(xml, QStringLiteral("      <segment bytes=\"4\" number=\"1\">plain@example.invalid</segment>\n"));
+    QVERIFY(!xml.contains(QStringLiteral("segmentIndex=")));
+}
+
+void NzbTest::validatesEncryptionSettings()
+{
+    EncryptionSettings settings;
+    QString error;
+    QVERIFY(settings.validate(&error));
+    settings.enabled = true;
+    QVERIFY(!settings.validate(&error));
+    QVERIFY(!error.isEmpty());
+    settings.password = QStringLiteral("p<&\"");
+    QVERIFY(settings.validate(&error));
+    settings.controlLines = false;
+    QVERIFY(!settings.validate(&error));
+    settings.enabled = false;
+    QVERIFY(settings.validate(&error));
+    settings.clearPassword();
+    QVERIFY(settings.password.isEmpty());
+}
+
+QTEST_APPLESS_MAIN(NzbTest)
+
+#include "NzbTest.moc"

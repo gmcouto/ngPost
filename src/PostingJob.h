@@ -147,6 +147,7 @@ private:
     const bool _obfuscateArticles;
     const bool _obfuscateFileName;
     const bool _encryptionEnabled;
+    QString _encryptionPassword;
     QByteArray _encryptionSalt;
     CryptoKeys _encryptionKeys;
     SegmentIndexAllocator _segmentIndices;

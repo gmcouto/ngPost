@@ -184,8 +184,10 @@ void PostingWidget::postFiles(bool updateMainParams)
                                      _ngPost->_tmpPath, _ngPost->_rarPath, _ngPost->_rarArgs,
                                      _ngPost->_rarSize, _ngPost->_useRarMax, _ngPost->_par2Pct,
                                      _ngPost->_doCompress, _ngPost->_doPar2,
-                                     _ngPost->_rarName, _ngPost->_rarPass,
-                                     _ngPost->_keepRar);
+                                      _ngPost->_rarName, _ngPost->_rarPass,
+                                      _ngPost->_keepRar, false, true, nullptr,
+                                      _ngPost->_encryption.enabled ? _ngPost->_encryption.password : QString());
+
 
         bool hasStarted = _ngPost->startPostingJob(_postingJob);
 

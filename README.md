@@ -90,6 +90,9 @@ Syntax: ngPost (options)* (-i <file or folder> | --auto <folder> | --monitor <fo
 	-x or --obfuscate  : obfuscate the subjects of the articles (CAREFUL you won't find your post if you lose the nzb file)
 	-g or --groups     : newsgroups where to post the files (coma separated without space)
 	-m or --meta       : extra meta data in header (typically "password=qwerty42")
+	--encrypt          : encrypt yEnc bodies and control lines
+	--encrypt-password : password for yEnc encryption (required with --encrypt)
+	--encrypt-control-lines: confirm control-line encryption (always on with --encrypt)
 	-f or --from       : poster email (random one if not provided)
 	-a or --article_size: article size (default one: 716800)
 	-z or --msg_id     : msg id signature, after the @ (default one: ngPost)

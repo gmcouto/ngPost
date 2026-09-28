@@ -87,6 +87,7 @@ SOURCES += \
         nntp/Nntp.cpp \
         nntp/NntpArticle.cpp \
         nntp/NntpFile.cpp \
+        nntp/NzbWriter.cpp \
         utils/CmdOrGuiApp.cpp \
         utils/Yenc.cpp
 
@@ -100,6 +101,7 @@ HEADERS += \
     ArticleBuilder.h \
     crypto/CryptoEngine.h \
     crypto/FF1Cipher.h \
+    EncryptionSettings.h \
     FileUploader.h \
     FoldersMonitorForNewFiles.h \
     NgPost.h \
@@ -112,6 +114,7 @@ HEADERS += \
     nntp/NntpArticle.h \
     nntp/NntpFile.h \
     nntp/NntpServerParams.h \
+    nntp/NzbWriter.h \
     utils/CmdOrGuiApp.h \
     utils/Macros.h \
     utils/PureStaticClass.h \

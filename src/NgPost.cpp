@@ -113,6 +113,9 @@ const QMap<NgPost::Opt, QString> NgPost::sOptionNames =
 
     {Opt::MSG_ID,       "msg_id"},
     {Opt::META,         "meta"},
+    {Opt::ENCRYPT,      "encrypt"},
+    {Opt::ENCRYPT_PASSWORD, "encrypt-password"},
+    {Opt::ENCRYPT_CONTROL_LINES, "encrypt-control-lines"},
     {Opt::ARTICLE_SIZE, "article_size"},
     {Opt::FROM,         "from"},
     {Opt::GROUPS,       "groups"},
@@ -185,6 +188,9 @@ const QList<QCommandLineOption> NgPost::sCmdOptions = {
     {{"x", sOptionNames[Opt::OBFUSCATE]},     tr("obfuscate the subjects of the articles (CAREFUL you won't find your post if you lose the nzb file)")},
     {{"g", sOptionNames[Opt::GROUPS]},        tr("newsgroups where to post the files (coma separated without space)"), sOptionNames[Opt::GROUPS]},
     {{"m", sOptionNames[Opt::META]},          tr("extra meta data in header (typically \"password=qwerty42\")"), sOptionNames[Opt::META]},
+    { sOptionNames[Opt::ENCRYPT],              tr("encrypt yEnc bodies and control lines")},
+    { sOptionNames[Opt::ENCRYPT_PASSWORD],     tr("password for yEnc encryption (requires --encrypt)"), sOptionNames[Opt::ENCRYPT_PASSWORD]},
+    { sOptionNames[Opt::ENCRYPT_CONTROL_LINES], tr("encrypt yEnc control lines (requires --encrypt)")},
     {{"f", sOptionNames[Opt::FROM]},          tr("poster email (random one if not provided)"), sOptionNames[Opt::FROM]},
     {{"a", sOptionNames[Opt::ARTICLE_SIZE]},  tr("article size (default one: %1)").arg(sDefaultArticleSize), sOptionNames[Opt::ARTICLE_SIZE]},
     {{"z", sOptionNames[Opt::MSG_ID]},        tr("msg id signature, after the @ (default one: %1)").arg(sDefaultMsgIdSignature), sOptionNames[Opt::MSG_ID]},
@@ -261,7 +267,7 @@ NgPost::NgPost(int &argc, char *argv[]):
     _nntpServers(),
     _obfuscateArticles(false), _obfuscateFileName(false),
     _genFrom(false), _saveFrom(false), _from(),
-    _meta(), _grpList(sDefaultGroups), _nbGroups(sDefaultGroups.size()),
+    _meta(), _encryption(), _grpList(sDefaultGroups), _nbGroups(sDefaultGroups.size()),
     _nbThreads(QThread::idealThreadCount()),
     _socketTimeOut(sDefaultSocketTimeOut), _nzbPath(sDefaultNzbPath), _nzbPathConf(sDefaultNzbPath),
     _progressbarTimer(), _refreshRate(sDefaultRefreshRate),
@@ -386,6 +392,7 @@ void NgPost::_stopMonitoring()
 
 NgPost::~NgPost()
 {
+    _encryption.clearPassword();
 #ifdef __DEBUG__
     _log("Destuction NgPost...");
 #endif
@@ -797,8 +804,10 @@ void NgPost::_post(const QFileInfo &fileInfo, const QString &monitorFolder)
                                    _obfuscateArticles, _obfuscateFileName,
                                    _tmpPath, _rarPath, _rarArgs,
                                    _rarSize, _useRarMax, _par2Pct,
-                                   _doCompress, _doPar2, _rarName, _rarPass,
-                                   _keepRar, _delAuto, false));
+                                    _doCompress, _doPar2, _rarName, _rarPass,
+                                    _keepRar, _delAuto, false, nullptr,
+                                    _encryption.enabled ? _encryption.password : QString()));
+
 }
 
 
@@ -1471,6 +1480,29 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
         }
     }
 
+    const bool encryptionOptionSet = parser.isSet(sOptionNames[Opt::ENCRYPT])
+            || parser.isSet(sOptionNames[Opt::ENCRYPT_PASSWORD])
+            || parser.isSet(sOptionNames[Opt::ENCRYPT_CONTROL_LINES]);
+    if(encryptionOptionSet)
+    {
+        if(!parser.isSet(sOptionNames[Opt::ENCRYPT]))
+        {
+            _error(tr("Error syntax: --encrypt-password and --encrypt-control-lines require --encrypt"),
+                   ERROR_CODE::ERR_WRONG_ARG);
+            return false;
+        }
+        _encryption.enabled = true;
+        if(parser.isSet(sOptionNames[Opt::ENCRYPT_PASSWORD]))
+            _encryption.password = parser.value(sOptionNames[Opt::ENCRYPT_PASSWORD]);
+        _encryption.controlLines = true;
+        QString encryptionError;
+        if(!_encryption.validate(&encryptionError))
+        {
+            _error(tr("Error syntax: %1").arg(encryptionError), ERROR_CODE::ERR_WRONG_ARG);
+            return false;
+        }
+    }
+
 
     if (parser.isSet(sOptionNames[Opt::GROUPS]))
         updateGroups(parser.value(sOptionNames[Opt::GROUPS]));
@@ -1807,7 +1839,8 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
                                        _tmpPath, _rarPath, _rarArgs,
                                        _rarSize, _useRarMax, _par2Pct,
                                        _doCompress, _doPar2, _rarName, _rarPass,
-                                       _keepRar, _delAuto, false));
+                                       _keepRar, _delAuto, false, nullptr,
+                                       _encryption.enabled ? _encryption.password : QString()));
     }
 
     if (_autoDirs.size())
@@ -2032,6 +2065,18 @@ QString NgPost::_parseConfig(const QString &configPath)
                             _obfuscateArticles = true;
                             qDebug() << "Do article obfuscation (the subject of each Article will be a UUID)\n";
                         }
+                    }
+                    else if (opt == sOptionNames[Opt::ENCRYPT])
+                    {
+                        val = val.toLower();
+                        _encryption.enabled = val == "true" || val == "on" || val == "1";
+                    }
+                    else if (opt == sOptionNames[Opt::ENCRYPT_PASSWORD])
+                        _encryption.password = args.join("=").trimmed();
+                    else if (opt == sOptionNames[Opt::ENCRYPT_CONTROL_LINES])
+                    {
+                        val = val.toLower();
+                        _encryption.controlLines = val == "true" || val == "on" || val == "1";
                     }
                     else if (opt == sOptionNames[Opt::GROUP_POLICY])
                     {
@@ -2351,6 +2396,10 @@ QString NgPost::_parseConfig(const QString &configPath)
         file.close();
     }
 
+    QString encryptionError;
+    if(err.isEmpty() && !_encryption.validate(&encryptionError))
+        err += tr("Invalid encryption configuration: %1\n").arg(encryptionError);
+
     if (err.isEmpty() && !_postHistoryFile.isEmpty())
     {
         QFile file(_postHistoryFile);
@@ -2485,6 +2534,7 @@ void NgPost::_dumpParams() const
              << " policy: " << sGroupPolicies[_groupPolicy].toUpper()
              << "\narticleSize: " << sArticleSize
              << ", obfuscate articles: " << _obfuscateArticles
+             << ", encrypt: " << _encryption.enabled
              << ", disp progress bar: " << _dispProgressBar
              << ", disp posting files: " << _dispFilesPosting
              << ", logInFile (GUI only): " << (_logFile == nullptr ? "NO" : "YES")
@@ -2644,6 +2694,12 @@ void NgPost::saveConfig()
                << tr("## uncomment the following line to obfuscate the subjects of each Article") << "\n"
                << tr("## /!\\ CAREFUL you won't find your post if you lose the nzb file /!\\") << "\n"
                << (_obfuscateArticles ? "" : "#") << "obfuscate = article\n"
+               << "\n"
+               << tr("## yEnc transport encryption always protects both bodies and control lines") << "\n"
+               << tr("## Set ENCRYPT-PASSWORD separately after saving; passwords are never written by the GUI") << "\n"
+               << "#ENCRYPT = true\n"
+               << "#ENCRYPT-PASSWORD = yourPassword\n"
+               << "#ENCRYPT-CONTROL-LINES = true\n"
                << "\n"
                << tr("## remove accents and special characters from the nzb file names") << "\n"
                << (_removeAccentsOnNzbFileName  ? "" : "#") << "NZB_RM_ACCENTS = true\n"

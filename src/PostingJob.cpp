@@ -23,6 +23,7 @@
 #include "nntp/NntpServerParams.h"
 #include "nntp/NntpFile.h"
 #include "nntp/NntpArticle.h"
+#include "nntp/NzbWriter.h"
 #ifdef __USE_HMI__
   #include "hmi/PostingWidget.h"
 #endif
@@ -84,7 +85,8 @@ PostingJob::PostingJob(NgPost *ngPost,
     _stopPosting(0x0), _noMoreFiles(0x0),
     _postStarted(false), _packed(false), _postFinished(false),
     _obfuscateArticles(obfuscateArticles), _obfuscateFileName(obfuscateFileName),
-    _encryptionEnabled(!encryptionPassword.isEmpty()), _encryptionSalt(), _encryptionKeys(),
+    _encryptionEnabled(!encryptionPassword.isEmpty()), _encryptionPassword(encryptionPassword),
+    _encryptionSalt(), _encryptionKeys(),
     _segmentIndices(), _encryptionError(),
     _delFilesAfterPost(delFilesAfterPost ? 0x1 : 0x0),
     _originalFiles(!postWidget || delFilesAfterPost  || obfuscateFileName ? files : QFileInfoList()),
@@ -177,6 +179,9 @@ PostingJob::~PostingJob()
         sodium_memzero(_encryptionKeys.bodyKey.data(), static_cast<size_t>(_encryptionKeys.bodyKey.size()));
     if(!_encryptionKeys.controlKey.isEmpty())
         sodium_memzero(_encryptionKeys.controlKey.data(), static_cast<size_t>(_encryptionKeys.controlKey.size()));
+    _encryptionPassword.detach();
+    _encryptionPassword.fill(QChar(0));
+    _encryptionPassword.clear();
 }
 
 void PostingJob::pause()
@@ -397,15 +402,8 @@ void PostingJob::_postFiles()
                    << "<!DOCTYPE nzb PUBLIC \"-//newzBin//DTD NZB 1.1//EN\" \"http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd\">\n"
                    << "<nzb xmlns=\"http://www.newzbin.com/DTD/2003/nzb\">\n";
 
-        if (!_rarPass.isEmpty() || _ngPost->_meta.size())
-        {
-            _nzbStream << tab << "<head>\n";
-            for (auto itMeta = _ngPost->_meta.cbegin(); itMeta != _ngPost->_meta.cend() ; ++itMeta)
-                _nzbStream << tab << tab << "<meta type=\"" << itMeta.key() << "\">" << itMeta.value() << "</meta>\n";
-            if (!_rarPass.isEmpty())
-                _nzbStream << tab << tab << "<meta type=\"password\">" << _rarPass << "</meta>\n";
-            _nzbStream << tab << "</head>\n\n";
-        }
+        NzbWriter::writeHead(_nzbStream, tab, _ngPost->_meta, _rarPass,
+                             _encryptionEnabled ? _encryptionPassword : QString());
         _nzbStream << MB_FLUSH;
     }
 
