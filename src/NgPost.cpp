@@ -1476,7 +1476,7 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
         {
             QStringList mList = meta.split("=");
             if (mList.size() == 2)
-                _meta.insert(escapeXML(mList[0]), escapeXML(mList[1]));
+                _meta.insert(mList[0], mList[1]);
         }
     }
 

@@ -10,6 +10,8 @@ class NzbTest : public QObject
 private slots:
     void encryptedHeadIncludesTransportMetadata();
     void ordinaryHeadPreservesArchiveMetadata();
+    void writerOwnsEscapingForRawMetadata();
+    void writerRejectsInjectionAttempts();
     void encryptedSegmentsIncludeExplicitIndices();
     void ordinarySegmentsRemainUnchanged();
     void validatesEncryptionSettings();
@@ -42,6 +44,29 @@ void NzbTest::ordinaryHeadPreservesArchiveMetadata()
     QVERIFY(!xml.contains(QStringLiteral("yenc_encrypted")));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">archive&lt;&amp;&quot;pass</meta>")));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
+}
+
+void NzbTest::writerOwnsEscapingForRawMetadata()
+{
+    QMap<QString, QString> meta;
+    meta.insert(QStringLiteral("cat<>\"&'"), QStringLiteral("va<lue&\""));
+    QString xml;
+    QTextStream stream(&xml);
+    NzbWriter::writeHead(stream, QStringLiteral("  "), meta, QString());
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"cat&lt;&gt;&quot;&amp;&apos;\">va&lt;lue&amp;&quot;</meta>")));
+    QVERIFY(!xml.contains(QStringLiteral("</meta><meta")));
+}
+
+void NzbTest::writerRejectsInjectionAttempts()
+{
+    QMap<QString, QString> meta;
+    meta.insert(QStringLiteral("other"), QStringLiteral("x</meta><meta type=\"peekable\">true"));
+    QString xml;
+    QTextStream stream(&xml);
+    NzbWriter::writeHead(stream, QStringLiteral("  "), meta, QStringLiteral("p</meta><meta"));
+    QVERIFY(xml.contains(QStringLiteral("x&lt;/meta&gt;&lt;meta type=&quot;peekable&quot;&gt;true")));
+    QVERIFY(xml.contains(QStringLiteral("p&lt;/meta&gt;&lt;meta")));
+    QVERIFY(!xml.contains(QStringLiteral("<meta type=\"peekable\">")));
 }
 
 void NzbTest::encryptedSegmentsIncludeExplicitIndices()

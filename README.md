@@ -49,9 +49,14 @@ Here are the main features and advantages of ngPost:
 ### How to build
 #### Dependencies:
 - build-essential (C++ compiler, libstdc++, make,...)
-- qt5-default (Qt5 libraries and headers)
+- qt5-default (Qt5 libraries and headers) or qtbase5-dev on Debian 12+
 - qt5-qmake (to generate the moc files and create the Makefile)
 - libssl (v1.0.2 or v1.1) but it should be already installed on your system
+- libargon2 (Argon2id key derivation)
+- libsodium (XChaCha20-Poly1305 AEAD)
+
+On Debian/Ubuntu install the development packages with:
+`apt-get install build-essential qt5-qmake qtbase5-dev libargon2-dev libsodium-dev libssl-dev`
 
 #### Build:
 - go to the src folder

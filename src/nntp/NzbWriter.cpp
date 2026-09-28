@@ -1,8 +1,21 @@
 #include "NzbWriter.h"
 
-#include "NgPost.h"
 
 #include <QTextStream>
+
+namespace
+{
+QString xmlEscape(const QString &value)
+{
+    QString escaped(value);
+    escaped.replace('&', QStringLiteral("&amp;"));
+    escaped.replace('<', QStringLiteral("&lt;"));
+    escaped.replace('>', QStringLiteral("&gt;"));
+    escaped.replace('"', QStringLiteral("&quot;"));
+    escaped.replace('\'', QStringLiteral("&apos;"));
+    return escaped;
+}
+}
 
 void NzbWriter::writeHead(QTextStream &stream, const QString &tab,
                           const QMap<QString, QString> &meta,
@@ -19,18 +32,18 @@ void NzbWriter::writeHead(QTextStream &stream, const QString &tab,
         if((encrypted && itMeta.key().compare(QStringLiteral("password"), Qt::CaseInsensitive) == 0)
                 || itMeta.key().compare(QStringLiteral("yenc_encrypted"), Qt::CaseInsensitive) == 0)
             continue;
-        stream << tab << tab << "<meta type=\"" << itMeta.key() << "\">"
-               << itMeta.value() << "</meta>\n";
+        stream << tab << tab << "<meta type=\"" << xmlEscape(itMeta.key()) << "\">"
+               << xmlEscape(itMeta.value()) << "</meta>\n";
     }
     if(encrypted)
     {
         stream << tab << tab << "<meta type=\"yenc_encrypted\">true</meta>\n"
                << tab << tab << "<meta type=\"password\">"
-               << NgPost::escapeXML(encryptionPassword) << "</meta>\n";
+               << xmlEscape(encryptionPassword) << "</meta>\n";
     }
     else if(!archivePassword.isEmpty())
         stream << tab << tab << "<meta type=\"password\">"
-               << NgPost::escapeXML(archivePassword) << "</meta>\n";
+               << xmlEscape(archivePassword) << "</meta>\n";
     stream << tab << "</head>\n\n";
 }
 
@@ -40,5 +53,5 @@ void NzbWriter::writeSegment(QTextStream &stream, const QString &tab, qint64 byt
     stream << tab << "<segment bytes=\"" << bytes << "\" number=\"" << number << "\"";
     if(segmentIndex != 0)
         stream << " segmentIndex=\"" << segmentIndex << "\"";
-    stream << ">" << NgPost::escapeXML(messageId) << "</segment>\n";
+    stream << ">" << xmlEscape(messageId) << "</segment>\n";
 }

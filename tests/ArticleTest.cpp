@@ -10,30 +10,28 @@ class ArticleTest : public QObject
     Q_OBJECT
 
 private slots:
-    void encryptedArticleUsesCiphertextCrc();
+    void encryptedSinglePartUsesStrictFraming();
+    void encryptedMultipartUsesStrictFraming();
     void unencryptedArticleIsUnchanged();
     void segmentIndicesProgressReleaseWide();
+    void segmentIndexAllocatorRejectsExhaustion();
 };
 
-void ArticleTest::encryptedArticleUsesCiphertextCrc()
+void ArticleTest::encryptedSinglePartUsesStrictFraming()
 {
     const QByteArray plaintext = QByteArray::fromHex("48656c6c6f20576f726c642e747874ff");
     const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
-    YencEncryptionContext encryption;
-    encryption.salt = salt;
-    encryption.segmentIndex = 1;
+    QByteArray masterKey;
     QString error;
-    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, encryption.masterKey, &error),
+    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
              qPrintable(error));
-    encryption.bodyKey = encryption.masterKey;
+    YencEncryptionContext encryption(masterKey, masterKey, salt, 1);
 
     QByteArray wire;
     quint32 crc32 = 0;
     QVERIFY2(Yenc::encodeArticle(plaintext, 1, 1, plaintext.size(), 0, QByteArrayLiteral("file.bin"),
                                  &encryption, wire, crc32, &error), qPrintable(error));
     QCOMPARE(crc32, quint32(0x59fb5938));
-    QVERIFY(!wire.contains("=yencryption"));
-    QVERIFY(!wire.contains("=ybegin"));
     QCOMPARE(wire.left(16), salt);
 
     QByteArray restored;
@@ -42,12 +40,38 @@ void ArticleTest::encryptedArticleUsesCiphertextCrc()
                                             &extractedSalt, &error), qPrintable(error));
     QCOMPARE(extractedSalt, salt);
     const QList<QByteArray> lines = restored.split('\n');
-    QVERIFY(lines.size() >= 5);
-    QVERIFY(lines.at(0).startsWith("=ybegin "));
-    QVERIFY(lines.at(1).startsWith("=ypart "));
+    QVERIFY(lines.size() >= 4);
+    QCOMPARE(lines.at(0), QByteArrayLiteral("=ybegin line=128 size=16 name=file.bin\r"));
+    QCOMPARE(lines.at(1), QByteArray("=yencryption cipher=XChaCha20-Poly1305 salt=")
+             + salt.toHex() + QByteArrayLiteral(" tag=1d46c0a9faf019cb5c745a08e9f4462e\r"));
+    QVERIFY(!restored.contains("=ypart"));
+    QCOMPARE(lines.at(lines.size() - 2), QByteArrayLiteral("=yend size=16 crc32=59fb5938\r"));
+}
+
+void ArticleTest::encryptedMultipartUsesStrictFraming()
+{
+    const QByteArray plaintext = QByteArray::fromHex("48656c6c6f20576f726c642e747874ff");
+    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
+    QByteArray masterKey;
+    QString error;
+    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
+             qPrintable(error));
+    YencEncryptionContext encryption(masterKey, masterKey, salt, 1);
+
+    QByteArray wire;
+    quint32 crc32 = 0;
+    QVERIFY2(Yenc::encodeArticle(plaintext, 1, 2, plaintext.size() * 2, 0, QByteArrayLiteral("file.bin"),
+                                 &encryption, wire, crc32, &error), qPrintable(error));
+
+    QByteArray restored;
+    QVERIFY2(FF1Cipher::decryptControlLines(wire, encryption.masterKey, 1, restored,
+                                            nullptr, &error), qPrintable(error));
+    const QList<QByteArray> lines = restored.split('\n');
+    QCOMPARE(lines.at(0), QByteArrayLiteral("=ybegin part=1 total=2 line=128 size=32 name=file.bin\r"));
+    QCOMPARE(lines.at(1), QByteArrayLiteral("=ypart begin=1 end=16\r"));
     QCOMPARE(lines.at(2), QByteArray("=yencryption cipher=XChaCha20-Poly1305 salt=")
              + salt.toHex() + QByteArrayLiteral(" tag=1d46c0a9faf019cb5c745a08e9f4462e\r"));
-    QVERIFY(lines.at(lines.size() - 2).contains("pcrc32=59fb5938"));
+    QCOMPARE(lines.at(lines.size() - 2), QByteArrayLiteral("=yend size=16 part=1 pcrc32=59fb5938\r"));
 }
 
 void ArticleTest::unencryptedArticleIsUnchanged()
@@ -75,6 +99,15 @@ void ArticleTest::segmentIndicesProgressReleaseWide()
     QCOMPARE(segmentIndex, quint32(2));
     QVERIFY(indices.next(segmentIndex));
     QCOMPARE(segmentIndex, quint32(3));
+}
+
+void ArticleTest::segmentIndexAllocatorRejectsExhaustion()
+{
+    SegmentIndexAllocator indices(0xffffffffU);
+    quint32 segmentIndex = 0;
+    QVERIFY(indices.next(segmentIndex));
+    QCOMPARE(segmentIndex, quint32(0xffffffffU));
+    QVERIFY(!indices.next(segmentIndex));
 }
 
 QTEST_APPLESS_MAIN(ArticleTest)

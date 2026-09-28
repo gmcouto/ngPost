@@ -28,6 +28,7 @@
   #include "hmi/PostingWidget.h"
 #endif
 #include <cmath>
+#include <limits>
 #include <QDebug>
 #include <QProcess>
 #include <QThread>
@@ -374,6 +375,12 @@ void PostingJob::_postFiles()
         emit archiveFileNames(archiveNames);
     }
     _initPosting();
+    if(MB_LoadAtomic(_stopPosting))
+    {
+        _finishPosting();
+        emit postingFinished();
+        return;
+    }
 
     if (_nbThreads > QThread::idealThreadCount())
         _nbThreads = QThread::idealThreadCount();
@@ -715,6 +722,10 @@ NntpArticle *PostingJob::_readNextArticleIntoBufferPtr(const QString &threadName
             {
                 _encryptionError = QStringLiteral("Encrypted release exceeds segmentIndex range");
                 _error(_encryptionError);
+                _stopPosting = 0x1;
+                _noMoreFiles = 0x1;
+                _finishPosting();
+                emit postingFinished();
                 return nullptr;
             }
             NntpArticle *article = new NntpArticle(_nntpFile, _part, pos, bytesRead,
@@ -771,6 +782,7 @@ void PostingJob::_initPosting()
     _filesToUpload.reserve(static_cast<int>(_nbFiles));
     uint fileNum = 0;
     int nbGroups = _grpList.size();
+    quint64 totalArticles = 0;
     for (const QFileInfo &file : _files)
     {
         NntpFile *nntpFile = new NntpFile(this,
@@ -786,8 +798,16 @@ void PostingJob::_initPosting()
             connect(nntpFile, &NntpFile::startPosting, this, &PostingJob::onNntpFileStartPosting, Qt::QueuedConnection);
 
         _filesToUpload.enqueue(nntpFile);
-        _nbArticlesTotal += nntpFile->nbArticles();
+        totalArticles += nntpFile->nbArticles();
     }
+    if(_encryptionEnabled && totalArticles > std::numeric_limits<quint32>::max())
+    {
+        _encryptionError = QStringLiteral("Encrypted release exceeds segmentIndex range");
+        _error(_encryptionError);
+        _stopPosting = 0x1;
+        _noMoreFiles = 0x1;
+    }
+    _nbArticlesTotal = static_cast<uint>(totalArticles);
     emit articlesNumber(_nbArticlesTotal);
 }
 

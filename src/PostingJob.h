@@ -47,7 +47,7 @@ private:
     quint32 _next;
 
 public:
-    SegmentIndexAllocator() : _next(1) {}
+    SegmentIndexAllocator(quint32 start = 1) : _next(start) {}
 
     bool next(quint32 &segmentIndex)
     {

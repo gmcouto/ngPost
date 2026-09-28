@@ -26,10 +26,14 @@
 
 struct YencEncryptionContext
 {
-    QByteArray bodyKey;
-    QByteArray masterKey;
-    QByteArray salt;
+    const QByteArray &bodyKey;
+    const QByteArray &masterKey;
+    const QByteArray &salt;
     quint32 segmentIndex;
+
+    YencEncryptionContext(const QByteArray &body, const QByteArray &master,
+                          const QByteArray &s, quint32 segment) :
+        bodyKey(body), masterKey(master), salt(s), segmentIndex(segment) {}
 };
 
 class Yenc : public PureStaticClass

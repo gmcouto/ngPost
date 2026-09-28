@@ -200,18 +200,34 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
     }
     encoded.resize(static_cast<int>(encodedSize - 1));
 
-    article = QByteArrayLiteral("=ybegin part=") + QByteArray::number(part)
-            + QByteArrayLiteral(" total=") + QByteArray::number(totalParts)
-            + QByteArrayLiteral(" line=128 size=") + QByteArray::number(fileSize)
-            + QByteArrayLiteral(" name=") + fileName + QByteArrayLiteral("\r\n")
-            + QByteArrayLiteral("=ypart begin=") + QByteArray::number(filePosition + 1)
-            + QByteArrayLiteral(" end=") + QByteArray::number(filePosition + plaintext.size())
-            + QByteArrayLiteral("\r\n");
+    const bool encryptedSinglePart = encryption && totalParts == 1;
+    if(encryptedSinglePart)
+    {
+        article = QByteArrayLiteral("=ybegin line=128 size=") + QByteArray::number(fileSize)
+                + QByteArrayLiteral(" name=") + fileName + QByteArrayLiteral("\r\n");
+    }
+    else
+    {
+        article = QByteArrayLiteral("=ybegin part=") + QByteArray::number(part)
+                + QByteArrayLiteral(" total=") + QByteArray::number(totalParts)
+                + QByteArrayLiteral(" line=128 size=") + QByteArray::number(fileSize)
+                + QByteArrayLiteral(" name=") + fileName + QByteArrayLiteral("\r\n")
+                + QByteArrayLiteral("=ypart begin=") + QByteArray::number(filePosition + 1)
+                + QByteArrayLiteral(" end=") + QByteArray::number(filePosition + plaintext.size())
+                + QByteArrayLiteral("\r\n");
+    }
     if(!encryptionLine.isEmpty())
         article += encryptionLine + QByteArrayLiteral("\r\n");
-    article += encoded + QByteArrayLiteral("\r\n=yend size=") + QByteArray::number(wirePayload.size())
-            + QByteArrayLiteral(" pcrc32=") + QByteArray::number(wireCrc32, 16).rightJustified(8, '0')
-            + QByteArrayLiteral("\r\n");
+    article += encoded + QByteArrayLiteral("\r\n=yend size=") + QByteArray::number(wirePayload.size());
+    if(encryptedSinglePart)
+        article += QByteArrayLiteral(" crc32=");
+    else
+    {
+        if(encryption)
+            article += QByteArrayLiteral(" part=") + QByteArray::number(part);
+        article += QByteArrayLiteral(" pcrc32=");
+    }
+    article += QByteArray::number(wireCrc32, 16).rightJustified(8, '0') + QByteArrayLiteral("\r\n");
 
     if(encryption)
     {
