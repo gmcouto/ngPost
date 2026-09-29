@@ -137,11 +137,47 @@ Examples:
   - with auto post: ngPost_v4.16_cmd-x86_64.AppImage --auto /data/folder1 --auto /data/folder2 --compress --gen_par2 --gen_name --gen_pass --rar_size 42 --disp_progress files
   - with compression, filename obfuscation, random password and par2: ngPost_v4.16_cmd-x86_64.AppImage -i /tmp/file1 -i /tmp/folder1 -o /nzb/myPost.nzb --compress --gen_name --gen_pass --gen_par2
   - with config file: ngPost_v4.16_cmd-x86_64.AppImage -c ~/.ngPost -m "password=qwerty42" -f ngPost@nowhere.com -i /tmp/file1 -i /tmp/file2 -i /tmp/folderToPost1 -i /tmp/folderToPost2
+  - with yEnc encryption: ngPost_v4.16_cmd-x86_64.AppImage -h news.example.com -P 563 -s -u user -p pass -g alt.binaries.test -o /nzb/out.nzb --encrypt --encrypt-password "MySecretPass" -i /tmp/file1
   - with all params:  ngPost_v4.16_cmd-x86_64.AppImage -t 1 -m "password=qwerty42" -m "metaKey=someValue" -h news.newshosting.com -P 443 -s -u user -p pass -n 30 -f ngPost@nowhere.com  -g "alt.binaries.test,alt.binaries.test2" -a 64000 -i /tmp/folderToPost -o /tmp/folderToPost.nzb
 
 If you don't provide the output file (nzb file), we will create it in the nzbPath with the name of the first file or folder given in the command line.
 so in the second example above, the nzb would be: /tmp/file1.nzb
 </pre>
+
+### yEnc Header and Body Encryption
+
+ngPost supports opt-in yEnc body and control-line encryption according to the experimental
+yEnc encryption standards. Article bodies are encrypted with XChaCha20-Poly1305, and control
+lines (`=ybegin`, `=ypart`, `=yend`, `=yencryption`) are encrypted using Radix 253 NIST SP 800-38G FF1.
+
+#### Command-line usage
+
+Enable encryption with `--encrypt` and provide a non-empty password via `--encrypt-password`:
+
+```bash
+ngPost -h news.example.com -P 563 -s -u user -p pass -g alt.binaries.test -o out.nzb \
+    --encrypt --encrypt-password "MySecretPass" -i movie.mkv
+```
+
+Flags:
+- `--encrypt`: Enables yEnc body and control-line encryption.
+- `--encrypt-password <PASS>`: Sets the encryption password (required with `--encrypt`).
+- `--encrypt-control-lines`: Confirms control-line encryption (always active when `--encrypt` is set).
+
+#### GUI and configuration file usage
+
+In `ngPost.conf` or `~/.ngPost`, configure the encryption parameters:
+
+```ini
+## yEnc transport encryption is opt-in and always protects both bodies and control lines
+ENCRYPT = true
+ENCRYPT-PASSWORD = yourPassword
+ENCRYPT-CONTROL-LINES = true
+```
+
+*Note:* For security, the desktop GUI does not write passwords into saved configuration files. Set `ENCRYPT-PASSWORD` manually in your configuration file.
+
+Generated NZBs automatically include `<meta type="yenc_encrypted">true</meta>`, `<meta type="password">`, and explicit `segmentIndex` attributes.
 
 ### Configuration file and keywords that are only in config
 The default configuration file for Linux and Mac environment is: **~/.ngPost** (no conf extension)<br/>
