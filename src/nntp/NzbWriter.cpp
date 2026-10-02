@@ -48,10 +48,8 @@ void NzbWriter::writeHead(QTextStream &stream, const QString &tab,
 }
 
 void NzbWriter::writeSegment(QTextStream &stream, const QString &tab, qint64 bytes, uint number,
-                             const QString &messageId, quint32 segmentIndex)
+                             const QString &messageId, quint32 /*segmentIndex*/)
 {
-    stream << tab << "<segment bytes=\"" << bytes << "\" number=\"" << number << "\"";
-    if(segmentIndex != 0)
-        stream << " segmentIndex=\"" << segmentIndex << "\"";
-    stream << ">" << xmlEscape(messageId) << "</segment>\n";
+    stream << tab << "<segment bytes=\"" << bytes << "\" number=\"" << number << "\">"
+           << xmlEscape(messageId) << "</segment>\n";
 }

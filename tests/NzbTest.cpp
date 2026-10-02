@@ -77,8 +77,9 @@ void NzbTest::encryptedSegmentsIncludeExplicitIndices()
                             QStringLiteral("one@example.invalid"), 1);
     NzbWriter::writeSegment(stream, QStringLiteral("      "), 4, 2,
                             QStringLiteral("two<&@example.invalid"), 2);
-    QVERIFY(xml.contains(QStringLiteral("<segment bytes=\"4\" number=\"1\" segmentIndex=\"1\">one@example.invalid</segment>")));
-    QVERIFY(xml.contains(QStringLiteral("<segment bytes=\"4\" number=\"2\" segmentIndex=\"2\">two&lt;&amp;@example.invalid</segment>")));
+    QVERIFY(xml.contains(QStringLiteral("<segment bytes=\"4\" number=\"1\">one@example.invalid</segment>")));
+    QVERIFY(xml.contains(QStringLiteral("<segment bytes=\"4\" number=\"2\">two&lt;&amp;@example.invalid</segment>")));
+    QVERIFY(!xml.contains(QStringLiteral("segmentIndex")));
 }
 
 void NzbTest::ordinarySegmentsRemainUnchanged()
@@ -88,7 +89,7 @@ void NzbTest::ordinarySegmentsRemainUnchanged()
     NzbWriter::writeSegment(stream, QStringLiteral("      "), 4, 1,
                             QStringLiteral("plain@example.invalid"));
     QCOMPARE(xml, QStringLiteral("      <segment bytes=\"4\" number=\"1\">plain@example.invalid</segment>\n"));
-    QVERIFY(!xml.contains(QStringLiteral("segmentIndex=")));
+    QVERIFY(!xml.contains(QStringLiteral("segmentIndex")));
 }
 
 void NzbTest::validatesEncryptionSettings()
