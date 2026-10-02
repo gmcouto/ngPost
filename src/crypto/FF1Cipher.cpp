@@ -441,24 +441,48 @@ QByteArray joinLines(const std::vector<Line> &lines)
     return block;
 }
 
-bool yencryptionSalt(const QByteArray &line, QByteArray &salt)
+bool parseYencryptionLine(const QByteArray &line, QByteArray &salt, quint32 &segmentIndex, QByteArray *tag = nullptr)
 {
     const QByteArray prefix = QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=");
-    if(!line.startsWith(prefix))
+    if(line.size() != 128 || !line.startsWith(prefix))
         return false;
-    const int saltStart = prefix.size();
-    const int tagMarker = line.indexOf(QByteArrayLiteral(" tag="), saltStart);
-    if(tagMarker != saltStart + 32 || line.size() != tagMarker + 5 + 32)
+    const QByteArray saltHex = line.mid(44, 32);
+    if(line.mid(76, 7) != QByteArrayLiteral(" index="))
         return false;
-    const QByteArray saltHex = line.mid(saltStart, 32);
-    const QByteArray tagHex = line.mid(tagMarker + 5, 32);
-    for(char value : saltHex + tagHex)
+    const QByteArray indexHex = line.mid(83, 8);
+    if(line.mid(91, 5) != QByteArrayLiteral(" tag="))
+        return false;
+    const QByteArray tagHex = line.mid(96, 32);
+
+    for(char value : saltHex)
     {
         if(!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f')))
             return false;
     }
+    for(char value : indexHex)
+    {
+        if(!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f')))
+            return false;
+    }
+    for(char value : tagHex)
+    {
+        if(!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f')))
+            return false;
+    }
+
+    bool ok = false;
+    const quint32 index = indexHex.toUInt(&ok, 16);
+    if(!ok || index == 0)
+        return false;
+
     salt = QByteArray::fromHex(saltHex);
-    return salt.size() == SaltSize;
+    if(salt.size() != SaltSize)
+        return false;
+
+    segmentIndex = index;
+    if(tag)
+        *tag = QByteArray::fromHex(tagHex);
+    return true;
 }
 }
 
@@ -512,7 +536,7 @@ bool FF1Cipher::encryptLine(const QByteArray &plaintext, const QByteArray &maste
             sodium_memzero(tweak.data(), static_cast<size_t>(tweak.size()));
         return false;
     }
-    wire = lineIndex == 1 ? salt + ciphertext : ciphertext;
+    wire = lineIndex == 1 ? salt + uint32Be(segmentIndex) + ciphertext : ciphertext;
     sodium_memzero(controlKey.data(), static_cast<size_t>(controlKey.size()));
     sodium_memzero(tweak.data(), static_cast<size_t>(tweak.size()));
     return true;
@@ -521,16 +545,30 @@ bool FF1Cipher::encryptLine(const QByteArray &plaintext, const QByteArray &maste
 bool FF1Cipher::decryptLine(const QByteArray &wire, const QByteArray &masterKey, quint32 segmentIndex,
                             quint32 lineIndex, QByteArray &plaintext, QByteArray *salt, QString *error)
 {
+    return decryptLine(wire, masterKey, segmentIndex, lineIndex, plaintext, salt, nullptr, error);
+}
+
+bool FF1Cipher::decryptLine(const QByteArray &wire, const QByteArray &masterKey, quint32 segmentIndex,
+                            quint32 lineIndex, QByteArray &plaintext, QByteArray *salt,
+                            quint32 *extractedSegmentIndex, QString *error)
+{
     plaintext.clear();
-    if(masterKey.size() != KeySize || segmentIndex == 0 || lineIndex == 0)
+    if(masterKey.size() != KeySize || lineIndex == 0)
     {
         setError(error, QStringLiteral("Invalid key or control-line index"));
         return false;
     }
+    if(lineIndex != 1 && segmentIndex == 0)
+    {
+        setError(error, QStringLiteral("segmentIndex must be non-zero"));
+        return false;
+    }
+
+    quint32 effectiveSegmentIndex = segmentIndex;
     QByteArray ciphertext = wire;
     if(lineIndex == 1)
     {
-        if(wire.size() < SaltSize + 2)
+        if(wire.size() < SaltSize + 4 + 2)
         {
             setError(error, QStringLiteral("Encrypted Line 1 is too short"));
             return false;
@@ -544,15 +582,32 @@ bool FF1Cipher::decryptLine(const QByteArray &wire, const QByteArray &masterKey,
                 return false;
             }
         }
+        const quint32 extractedIndex = (static_cast<uchar>(wire[16]) << 24)
+                                     | (static_cast<uchar>(wire[17]) << 16)
+                                     | (static_cast<uchar>(wire[18]) << 8)
+                                     | static_cast<uchar>(wire[19]);
+        if(extractedIndex == 0)
+        {
+            setError(error, QStringLiteral("Extracted segmentIndex must be non-zero"));
+            return false;
+        }
+        if(segmentIndex != 0 && extractedIndex != segmentIndex)
+        {
+            setError(error, QStringLiteral("segmentIndex mismatch on Line 1"));
+            return false;
+        }
+        effectiveSegmentIndex = extractedIndex;
         if(salt)
             *salt = extractedSalt;
-        ciphertext.remove(0, SaltSize);
+        if(extractedSegmentIndex)
+            *extractedSegmentIndex = extractedIndex;
+        ciphertext.remove(0, SaltSize + 4);
     }
 
     QByteArray controlKey;
     QByteArray tweak;
     if(!CryptoEngine::deriveControlKey(masterKey, controlKey, error)
-            || !CryptoEngine::deriveControlTweak(masterKey, segmentIndex, lineIndex, tweak, error)
+            || !CryptoEngine::deriveControlTweak(masterKey, effectiveSegmentIndex, lineIndex, tweak, error)
             || !ff1Transform(controlKey, tweak, ciphertext, true, plaintext, error))
     {
         if(!controlKey.isEmpty())
@@ -595,12 +650,13 @@ bool FF1Cipher::encryptControlLines(const QByteArray &block, const QByteArray &m
                 return false;
             }
             QByteArray headerSalt;
-            if(!yencryptionSalt(line.content, headerSalt))
+            quint32 headerIndex = 0;
+            if(!parseYencryptionLine(line.content, headerSalt, headerIndex))
             {
                 setError(error, QStringLiteral("Malformed =yencryption line"));
                 return false;
             }
-            if(headerSalt != salt)
+            if(headerSalt != salt || headerIndex != segmentIndex)
             {
                 setError(error, QStringLiteral("Line 1 salt and =yencryption salt must match"));
                 return false;
@@ -623,6 +679,13 @@ bool FF1Cipher::encryptControlLines(const QByteArray &block, const QByteArray &m
 bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &masterKey, quint32 segmentIndex,
                                     QByteArray &block, QByteArray *salt, QString *error)
 {
+    return decryptControlLines(wire, masterKey, segmentIndex, block, salt, nullptr, error);
+}
+
+bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &masterKey, quint32 segmentIndex,
+                                    QByteArray &block, QByteArray *salt, quint32 *extractedSegmentIndex,
+                                    QString *error)
+{
     block.clear();
     std::vector<Line> lines = splitLines(wire);
     if(lines.size() < 2)
@@ -632,8 +695,9 @@ bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &ma
     }
 
     QByteArray extractedSalt;
+    quint32 extractedIndex = 0;
     QByteArray firstLine;
-    if(!decryptLine(lines.front().content, masterKey, segmentIndex, 1, firstLine, &extractedSalt, error)
+    if(!decryptLine(lines.front().content, masterKey, segmentIndex, 1, firstLine, &extractedSalt, &extractedIndex, error)
             || !matchesControlLine(firstLine, QByteArrayLiteral("=ybegin")))
     {
         setError(error, QStringLiteral("Unable to restore =ybegin line"));
@@ -641,11 +705,13 @@ bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &ma
     }
     lines.front().content = firstLine;
 
+    const quint32 effectiveSegmentIndex = extractedIndex;
+
     for(size_t offset = 1; offset + 1 < lines.size(); ++offset)
     {
         QByteArray candidate;
-        if(!decryptLine(lines[offset].content, masterKey, segmentIndex, static_cast<quint32>(offset + 1),
-                        candidate, nullptr, nullptr))
+        if(!decryptLine(lines[offset].content, masterKey, effectiveSegmentIndex, static_cast<quint32>(offset + 1),
+                        candidate, nullptr, nullptr, nullptr))
             continue;
         if(isControlLine(candidate))
             lines[offset].content = candidate;
@@ -653,7 +719,7 @@ bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &ma
 
     QByteArray finalLine;
     const quint32 finalIndex = static_cast<quint32>(lines.size());
-    if(!decryptLine(lines.back().content, masterKey, segmentIndex, finalIndex, finalLine, nullptr, error)
+    if(!decryptLine(lines.back().content, masterKey, effectiveSegmentIndex, finalIndex, finalLine, nullptr, nullptr, error)
             || !matchesControlLine(finalLine, QByteArrayLiteral("=yend")))
     {
         setError(error, QStringLiteral("Unable to restore =yend line"));
@@ -672,7 +738,8 @@ bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &ma
             return false;
         }
         QByteArray headerSalt;
-        if(!yencryptionSalt(line.content, headerSalt) || headerSalt != extractedSalt)
+        quint32 headerIndex = 0;
+        if(!parseYencryptionLine(line.content, headerSalt, headerIndex) || headerSalt != extractedSalt || headerIndex != extractedIndex)
         {
             setError(error, QStringLiteral("Line 1 salt and =yencryption salt must match"));
             return false;
@@ -682,6 +749,8 @@ bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &ma
 
     if(salt)
         *salt = extractedSalt;
+    if(extractedSegmentIndex)
+        *extractedSegmentIndex = extractedIndex;
     block = joinLines(lines);
     return true;
 }

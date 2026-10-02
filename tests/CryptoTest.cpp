@@ -107,15 +107,15 @@ void CryptoTest::controlLineVectors_data()
     QTest::newRow("ybegin")
             << QByteArray("=ybegin line=128 size=18 name=file.bin")
             << quint32(1)
-            << QByteArray::fromHex("4b376d5839704c32715238764e34775a3ff69054da2b2309591e740e5b9fd79015f610d42f01bd203e5f55dadc39fc760407e845201f");
+            << QByteArray::fromHex("4b376d5839704c32715238764e34775a000000013ff69054da2b2309591e740e5b9fd79015f610d42f01bd203e5f55dadc39fc760407e845201f");
     QTest::newRow("ypart")
             << QByteArray("=ypart begin=1 end=700000")
             << quint32(2)
             << QByteArray::fromHex("2135072cf2b566804a99bd31fe1d42b2603a7518ae20a58498");
     QTest::newRow("yencryption")
-            << QByteArray("=yencryption cipher=XChaCha20-Poly1305 salt=1a2b3c4d5e6f7890abcdef1234567890 tag=0cd77ce245a654463f90b945b1d22d5b")
+            << QByteArray("=yencryption cipher=XChaCha20-Poly1305 salt=1a2b3c4d5e6f7890abcdef1234567890 index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b")
             << quint32(3)
-            << QByteArray::fromHex("72944db7426759aff6f27824ee38058d141a1a4a1ac080d4d828b846ccdeb2b978d88a6ffd4fa429ba2cc8a5424ac5e764786ec4aecf9024c59dcde8dae191553185af39ee7bbed0c7c6cbf1f74441c8c2d1f7765017357436500472ac212d1055dbc707af61306e409e180e1f311c9c87");
+            << QByteArray::fromHex("83d80bd33fadb8b408bb829e7609ca80e4519b05e21f1f1b77ee685d045869744273e698ccb5ac933183439b0e567524dedabd7e5ad04cf4dda5281932c622cfa2b9a2d45f3cb1ae166d211c653f7857610938a794cac9f56af7cd063581c9814746b807af1f64054caf73784941031c5fb1e4fed2a8460e801809a6b8f0d18d");
     QTest::newRow("yend")
             << QByteArray("=yend size=700000 part=1 pcrc32=12345678")
             << quint32(54)
@@ -138,11 +138,16 @@ void CryptoTest::controlLineVectors()
 
     QByteArray restored;
     QByteArray extractedSalt;
-    QVERIFY2(FF1Cipher::decryptLine(wire, masterKey, 1, lineIndex, restored, &extractedSalt, &error),
+    quint32 extractedIndex = 0;
+    QVERIFY2(FF1Cipher::decryptLine(wire, masterKey, 1, lineIndex, restored, &extractedSalt, &extractedIndex, &error),
              qPrintable(error));
     QCOMPARE(restored, plaintext);
     if(lineIndex == 1)
+    {
         QCOMPARE(extractedSalt, salt);
+        QCOMPARE(extractedIndex, quint32(1));
+        QCOMPARE(wire.left(20), salt + QByteArray::fromHex("00000001"));
+    }
 }
 
 void CryptoTest::fullArticlePreservesDataAndFraming()
@@ -163,14 +168,16 @@ void CryptoTest::fullArticlePreservesDataAndFraming()
     QCOMPARE(wireLines.size(), 4);
     QCOMPARE(wireLines[1], line2);
     QCOMPARE(wireLines[2], line3 + "\r");
-    QCOMPARE(wireLines[0].left(16), salt);
+    QCOMPARE(wireLines[0].left(20), salt + QByteArray::fromHex("00000001"));
 
     QByteArray restored;
     QByteArray extractedSalt;
-    QVERIFY2(FF1Cipher::decryptControlLines(wire, masterKey, 1, restored, &extractedSalt, &error),
+    quint32 extractedIndex = 0;
+    QVERIFY2(FF1Cipher::decryptControlLines(wire, masterKey, 1, restored, &extractedSalt, &extractedIndex, &error),
              qPrintable(error));
     QCOMPARE(restored, block);
     QCOMPARE(extractedSalt, salt);
+    QCOMPARE(extractedIndex, quint32(1));
 }
 
 void CryptoTest::rejectsDualSaltMismatch()
@@ -179,11 +186,18 @@ void CryptoTest::rejectsDualSaltMismatch()
     QByteArray masterKey;
     QString error;
     QVERIFY(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error));
-    const QByteArray block = QByteArrayLiteral("=ybegin line=128 size=18 name=file.bin\r\n")
-            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=1a2b3c4d5e6f7890abcdef1234567890 tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
+    const QByteArray blockMismatchSalt = QByteArrayLiteral("=ybegin line=128 size=18 name=file.bin\r\n")
+            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=1a2b3c4d5e6f7890abcdef1234567890 index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
             + QByteArrayLiteral("data\r\n=yend size=18\r\n");
     QByteArray wire;
-    QVERIFY(!FF1Cipher::encryptControlLines(block, masterKey, 1, salt, wire, &error));
+    QVERIFY(!FF1Cipher::encryptControlLines(blockMismatchSalt, masterKey, 1, salt, wire, &error));
+    QVERIFY(wire.isEmpty());
+
+    const QByteArray blockMismatchIndex = QByteArrayLiteral("=ybegin line=128 size=18 name=file.bin\r\n")
+            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=") + salt.toHex()
+            + QByteArrayLiteral(" index=00000002 tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
+            + QByteArrayLiteral("data\r\n=yend size=18\r\n");
+    QVERIFY(!FF1Cipher::encryptControlLines(blockMismatchIndex, masterKey, 1, salt, wire, &error));
     QVERIFY(wire.isEmpty());
 }
 
