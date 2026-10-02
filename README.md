@@ -146,9 +146,21 @@ so in the second example above, the nzb would be: /tmp/file1.nzb
 
 ### yEnc Header and Body Encryption
 
-ngPost supports opt-in yEnc body and control-line encryption according to the experimental
-yEnc encryption standards. Article bodies are encrypted with XChaCha20-Poly1305, and control
-lines (`=ybegin`, `=ypart`, `=yend`, `=yencryption`) are encrypted using Radix 253 NIST SP 800-38G FF1.
+ngPost supports opt-in yEnc body and control-line encryption according to the v1.1
+Self-Describing Article Bootstrap Standard. Article bodies are encrypted with
+XChaCha20-Poly1305, and control lines (`=ybegin`, `=ypart`, `=yend`, `=yencryption`)
+are encrypted using Radix 253 NIST SP 800-38G FF1.
+
+Under the v1.1 bootstrap standard, each posted Usenet article is self-describing
+and embeds its salt and monotonic segment index directly into the wire bytes:
+- A 20-byte bootstrap prefix (`[16-byte raw salt][4-byte uint32_be(segmentIndex)]`)
+  is prepended to physical Line 1 (`=ybegin`) before FF1 ciphertext.
+- A canonical 5-token header (`=yencryption cipher=XChaCha20-Poly1305 salt=<32_hex> index=<8_hex> tag=<32_hex>`)
+  provides dual-bootstrap agreement for downloaders.
+
+Generated NZBs strictly conform to the standard NZB 1.1 DTD without custom
+XML attributes on `<segment>` elements, including only `<meta type="yenc_encrypted">true</meta>`
+and `<meta type="password">` in `<head>`.
 
 #### Command-line usage
 
@@ -176,8 +188,6 @@ ENCRYPT-CONTROL-LINES = true
 ```
 
 *Note:* For security, the desktop GUI does not write passwords into saved configuration files. Set `ENCRYPT-PASSWORD` manually in your configuration file.
-
-Generated NZBs automatically include `<meta type="yenc_encrypted">true</meta>`, `<meta type="password">`, and explicit `segmentIndex` attributes.
 
 ### Configuration file and keywords that are only in config
 The default configuration file for Linux and Mac environment is: **~/.ngPost** (no conf extension)<br/>
