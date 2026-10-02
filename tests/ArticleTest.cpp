@@ -33,17 +33,20 @@ void ArticleTest::encryptedSinglePartUsesStrictFraming()
                                  &encryption, wire, crc32, &error), qPrintable(error));
     QCOMPARE(crc32, quint32(0x59fb5938));
     QCOMPARE(wire.left(16), salt);
+    QCOMPARE(wire.mid(16, 4), QByteArray::fromHex("00000001"));
 
     QByteArray restored;
     QByteArray extractedSalt;
+    quint32 extractedIndex = 0;
     QVERIFY2(FF1Cipher::decryptControlLines(wire, encryption.masterKey, 1, restored,
-                                            &extractedSalt, &error), qPrintable(error));
+                                            &extractedSalt, &extractedIndex, &error), qPrintable(error));
     QCOMPARE(extractedSalt, salt);
+    QCOMPARE(extractedIndex, quint32(1));
     const QList<QByteArray> lines = restored.split('\n');
     QVERIFY(lines.size() >= 4);
     QCOMPARE(lines.at(0), QByteArrayLiteral("=ybegin line=128 size=16 name=file.bin\r"));
     QCOMPARE(lines.at(1), QByteArray("=yencryption cipher=XChaCha20-Poly1305 salt=")
-             + salt.toHex() + QByteArrayLiteral(" tag=1d46c0a9faf019cb5c745a08e9f4462e\r"));
+             + salt.toHex() + QByteArrayLiteral(" index=00000001 tag=1d46c0a9faf019cb5c745a08e9f4462e\r"));
     QVERIFY(!restored.contains("=ypart"));
     QCOMPARE(lines.at(lines.size() - 2), QByteArrayLiteral("=yend size=16 crc32=59fb5938\r"));
 }
@@ -62,15 +65,21 @@ void ArticleTest::encryptedMultipartUsesStrictFraming()
     quint32 crc32 = 0;
     QVERIFY2(Yenc::encodeArticle(plaintext, 1, 2, plaintext.size() * 2, 0, QByteArrayLiteral("file.bin"),
                                  &encryption, wire, crc32, &error), qPrintable(error));
+    QCOMPARE(wire.left(16), salt);
+    QCOMPARE(wire.mid(16, 4), QByteArray::fromHex("00000001"));
 
     QByteArray restored;
+    QByteArray extractedSalt;
+    quint32 extractedIndex = 0;
     QVERIFY2(FF1Cipher::decryptControlLines(wire, encryption.masterKey, 1, restored,
-                                            nullptr, &error), qPrintable(error));
+                                            &extractedSalt, &extractedIndex, &error), qPrintable(error));
+    QCOMPARE(extractedSalt, salt);
+    QCOMPARE(extractedIndex, quint32(1));
     const QList<QByteArray> lines = restored.split('\n');
     QCOMPARE(lines.at(0), QByteArrayLiteral("=ybegin part=1 total=2 line=128 size=32 name=file.bin\r"));
     QCOMPARE(lines.at(1), QByteArrayLiteral("=ypart begin=1 end=16\r"));
     QCOMPARE(lines.at(2), QByteArray("=yencryption cipher=XChaCha20-Poly1305 salt=")
-             + salt.toHex() + QByteArrayLiteral(" tag=1d46c0a9faf019cb5c745a08e9f4462e\r"));
+             + salt.toHex() + QByteArrayLiteral(" index=00000001 tag=1d46c0a9faf019cb5c745a08e9f4462e\r"));
     QCOMPARE(lines.at(lines.size() - 2), QByteArrayLiteral("=yend size=16 part=1 pcrc32=59fb5938\r"));
 }
 

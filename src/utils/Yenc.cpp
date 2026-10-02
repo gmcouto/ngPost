@@ -181,8 +181,11 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
                                       encrypted, error))
             return false;
         wirePayload = encrypted.ciphertext;
+        const QByteArray indexHex = QStringLiteral("%1").arg(encryption->segmentIndex, 8, 16, QLatin1Char('0')).toLatin1();
         encryptionLine = QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
-                + encryption->salt.toHex() + QByteArrayLiteral(" tag=") + encrypted.tag.toHex();
+                + encryption->salt.toHex()
+                + QByteArrayLiteral(" index=") + indexHex
+                + QByteArrayLiteral(" tag=") + encrypted.tag.toHex();
     }
 
     if(wirePayload.size() > (std::numeric_limits<int>::max() - 4) / 2)
