@@ -52,6 +52,7 @@ private:
     const std::string *_from;    //!< NNTP header From (owned by PostingJob)
     char *_subject;              //!< NNTP header Subject (if defined it won't be obfuscated)
     char *_body;                 //!< full body of the Article with the yEnc header
+    qint64 _bodySize;            //!< byte length of _body
 
     const qint64 _filePos;   //!< position in the File (for yEnc header)
     const qint64 _fileBytes; //!< bytes of the original file that are encoded
@@ -90,6 +91,7 @@ public:
 
     std::string header(const std::string &idSignature) const;
     inline std::string body() const;
+    inline qint64 bodySize() const;
     inline QString id() const;
     inline uint part() const;
     inline quint32 segmentIndex() const;
@@ -124,9 +126,11 @@ void NntpArticle::freeMemory()
         delete[] _body;
         _body = nullptr;
     }
+    _bodySize = 0;
 }
 
-std::string NntpArticle::body() const { return _body; }
+std::string NntpArticle::body() const { return _body ? std::string(_body, static_cast<size_t>(_bodySize)) : std::string(); }
+qint64 NntpArticle::bodySize() const { return _bodySize; }
 
 QString NntpArticle::id() const { return _msgId; }
 uint NntpArticle::part() const{ return _part; }

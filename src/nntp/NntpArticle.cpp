@@ -35,6 +35,7 @@ NntpArticle::NntpArticle(NntpFile *file, uint part, qint64 pos, qint64 bytes,
     _from(from),
     _subject(nullptr),
     _body(nullptr),
+    _bodySize(0),
     _filePos(pos), _fileBytes(bytes),
     _nbTrySending(0),
     _msgId()
@@ -71,6 +72,7 @@ bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encry
                             block, crc32, error))
         return false;
     block += QByteArrayLiteral(".\r\n");
+    _bodySize = block.size();
     _body = new char[block.size() + 1];
     std::memcpy(_body, block.constData(), static_cast<size_t>(block.size()));
     _body[block.size()] = '\0';
@@ -129,8 +131,9 @@ bool NntpArticle::tryResend()
 void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
 {
     ++_nbTrySending;
-    con->write(header(idSignature).c_str());
-    con->write(_body);
+    const std::string h = header(idSignature);
+    con->write(h.data(), static_cast<qint64>(h.size()));
+    con->write(_body, _bodySize);
 }
 
 std::string NntpArticle::header(const std::string &idSignature) const
@@ -160,7 +163,8 @@ void NntpArticle::dumpToFile(const QString &path, const std::string &articleIdSi
         return;
     }
 
-    file.write(header(articleIdSignature).c_str());
-    file.write(_body);
+    const std::string h = header(articleIdSignature);
+    file.write(h.data(), static_cast<qint64>(h.size()));
+    file.write(_body, _bodySize);
     file.close();
 }
