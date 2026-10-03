@@ -6,3 +6,10 @@ moc_*.cpp
 ui_*.h
 moc_predefs.h
 qrc_resources.cpp
+tests/ArticleTest
+tests/ArticleTest.moc
+tests/CryptoTest
+tests/CryptoTest.moc
+tests/NzbTest
+tests/NzbTest.moc
+tests/target_wrapper.sh
