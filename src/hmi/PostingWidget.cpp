@@ -177,6 +177,14 @@ void PostingWidget::postFiles(bool updateMainParams)
 
         _postingFinished = false;
         _state = STATE::POSTING;
+
+        if (_ngPost->_encryption.enabled && _ngPost->_encryption.password.isEmpty())
+        {
+            _hmi->logError(tr("Encryption is enabled but password is empty. Aborting post."));
+            _state = STATE::IDLE;
+            return;
+        }
+
         _postingJob = new PostingJob(_ngPost, nzbPath, files, this,
                                      _ngPost->getPostingGroups(),
                                      _ngPost->from(),

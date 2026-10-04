@@ -796,7 +796,7 @@ void NgPost::_post(const QFileInfo &fileInfo, const QString &monitorFolder)
     }
 
     qDebug() << "Start posting job for " << _nzbName
-             << " with rar_name: " << _rarName << " and pass: " << _rarPass
+             << " with rar_name: " << _rarName << " and pass: " << (_rarPass.isEmpty() ? "<none>" : "***")
              << " (auto delete: " << _delAuto << ")";
 
     startPostingJob(new PostingJob(this, nzbFilePath, {fileInfo}, nullptr,
@@ -1652,7 +1652,7 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
                 int     nbCon = match.captured(6).toInt();
                 bool    ssl   = match.captured(7).isEmpty();
 #ifdef __DEBUG__
-                qDebug() << "NNTP Server: " << user << ":" << pass
+                qDebug() << "NNTP Server: " << user << ":" << (pass.isEmpty() ? "" : "***")
                          << "@" << host << ":" << port << ":" << nbCon << ":" << ssl;
 #endif
                 NntpServerParams *server = new NntpServerParams(host,
@@ -2398,7 +2398,11 @@ QString NgPost::_parseConfig(const QString &configPath)
 
     QString encryptionError;
     if(err.isEmpty() && !_encryption.validate(&encryptionError))
+    {
         err += tr("Invalid encryption configuration: %1\n").arg(encryptionError);
+        _encryption.enabled = false;
+        _encryption.clearPassword();
+    }
 
     if (err.isEmpty() && !_postHistoryFile.isEmpty())
     {
@@ -2518,7 +2522,14 @@ void NgPost::_dumpParams() const
 {
     QString servers;
     for (NntpServerParams *srv : _nntpServers)
-        servers += srv->str() + " ";
+    {
+        if (srv->auth)
+            servers += QString("[%5con%6 on %1:***@%3:%4 enabled:%7, nzbCheck:%8] ")
+                .arg(srv->user.c_str()).arg(srv->host).arg(srv->port).arg(srv->nbCons)
+                .arg(srv->useSSL ? " SSL" : "").arg(srv->enabled).arg(srv->nzbCheck);
+        else
+            servers += srv->str() + " ";
+    }
     qDebug() << "[NgPost::_dumpParams]>>>>>>>>>>>>>>>>>>\n"
              << "nb Servers: " << _nntpServers.size() << ": " << servers
 
@@ -2550,7 +2561,7 @@ void NgPost::_dumpParams() const
              << ", <par2_args: " << _par2Args << ">"
              << "\n\ncompress: " << _doCompress << ", doPar2: " << _doPar2
              << ", gen_name: " << _genName << ", genPass: " << _genPass
-             << "\nrarName: " << _rarName << ", rarPass: " << _rarPass
+             << "\nrarName: " << _rarName << ", rarPass: " << (_rarPass.isEmpty() ? "<none>" : "***")
              << ", lengthName: " << _lengthName << ", lengthPass: " << _lengthPass
              << "\n[NgPost::_dumpParams]<<<<<<<<<<<<<<<<<<\n";
 }

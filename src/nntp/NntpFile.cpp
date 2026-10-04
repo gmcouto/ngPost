@@ -141,7 +141,7 @@ void NntpFile::writeToNZB(QTextStream &stream, const QString &from)
 
         stream << tab << tab << "<groups>\n";
         for (const QString &grp : _grpList)
-            stream << tab << tab << tab << "<group>" << grp << "</group>\n";
+            stream << tab << tab << tab << "<group>" << NgPost::escapeXML(grp) << "</group>\n";
         stream << tab << tab << "</groups>\n";
 
         stream << tab << tab << "<segments>\n";

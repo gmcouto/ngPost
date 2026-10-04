@@ -26,10 +26,12 @@ void NzbWriter::writeHead(QTextStream &stream, const QString &tab,
     if(!encrypted && archivePassword.isEmpty() && meta.isEmpty())
         return;
 
+    const bool hasExplicitPassword = encrypted || !archivePassword.isEmpty();
+
     stream << tab << "<head>\n";
     for(auto itMeta = meta.cbegin(); itMeta != meta.cend(); ++itMeta)
     {
-        if((encrypted && itMeta.key().compare(QStringLiteral("password"), Qt::CaseInsensitive) == 0)
+        if((hasExplicitPassword && itMeta.key().compare(QStringLiteral("password"), Qt::CaseInsensitive) == 0)
                 || itMeta.key().compare(QStringLiteral("yenc_encrypted"), Qt::CaseInsensitive) == 0)
             continue;
         stream << tab << tab << "<meta type=\"" << xmlEscape(itMeta.key()) << "\">"

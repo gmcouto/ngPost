@@ -10,11 +10,13 @@ class NzbTest : public QObject
 private slots:
     void encryptedHeadIncludesTransportMetadata();
     void ordinaryHeadPreservesArchiveMetadata();
+    void ordinaryHeadPreservesArchiveMetadataWithoutDuplicatePassword();
     void writerOwnsEscapingForRawMetadata();
     void writerRejectsInjectionAttempts();
     void encryptedSegmentsIncludeExplicitIndices();
     void ordinarySegmentsRemainUnchanged();
     void validatesEncryptionSettings();
+    void encryptionSettingsValidationResetsInvalidState();
 };
 
 void NzbTest::encryptedHeadIncludesTransportMetadata()
@@ -44,6 +46,19 @@ void NzbTest::ordinaryHeadPreservesArchiveMetadata()
     QVERIFY(!xml.contains(QStringLiteral("yenc_encrypted")));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">archive&lt;&amp;&quot;pass</meta>")));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
+}
+
+void NzbTest::ordinaryHeadPreservesArchiveMetadataWithoutDuplicatePassword()
+{
+    QMap<QString, QString> meta;
+    meta.insert(QStringLiteral("category"), QStringLiteral("test"));
+    meta.insert(QStringLiteral("password"), QStringLiteral("meta-pass"));
+    QString xml;
+    QTextStream stream(&xml);
+    NzbWriter::writeHead(stream, QStringLiteral("  "), meta, QStringLiteral("archive-pass"), QString());
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">archive-pass</meta>")));
+    QVERIFY(!xml.contains(QStringLiteral("meta-pass")));
+    QCOMPARE(xml.count(QStringLiteral("<meta type=\"password\">")), 1);
 }
 
 void NzbTest::writerOwnsEscapingForRawMetadata()
@@ -107,6 +122,20 @@ void NzbTest::validatesEncryptionSettings()
     settings.enabled = false;
     QVERIFY(settings.validate(&error));
     settings.clearPassword();
+    QVERIFY(settings.password.isEmpty());
+}
+
+void NzbTest::encryptionSettingsValidationResetsInvalidState()
+{
+    EncryptionSettings settings;
+    settings.enabled = true;
+    settings.password = QString();
+    QString error;
+    QVERIFY(!settings.validate(&error));
+    QCOMPARE(error, QStringLiteral("Encryption requires a non-empty password"));
+    settings.enabled = false;
+    settings.clearPassword();
+    QVERIFY(!settings.enabled);
     QVERIFY(settings.password.isEmpty());
 }
 
