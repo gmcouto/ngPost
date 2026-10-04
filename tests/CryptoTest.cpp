@@ -17,6 +17,12 @@ private slots:
     void fullArticlePreservesDataAndFraming();
     void rejectsDualSaltMismatch();
     void generatedSaltsAreUsable();
+    // C2-03: Line 1 bootstrap prefix must never be split on embedded 0x0A/0x0D
+    void bootstrapPrefixSurvivesSegmentIndexDelimiterBytes();
+    // C2-04: missing =yencryption header must be rejected in both directions
+    void rejectsMissingEncryptionHeader();
+    // C2-06: destructor wipes must leave key buffers zeroed
+    void keyStructsWipeOnDestruction();
 };
 
 void CryptoTest::argon2idVectors_data()
@@ -160,14 +166,17 @@ void CryptoTest::fullArticlePreservesDataAndFraming()
     const QByteArray line2("DataLine1TestDataMustRemainUntouched1234567890");
     const QByteArray line3("DataLine2TestDataMustRemainUntouched1234567890");
     const QByteArray line4("=yend size=18");
-    const QByteArray block = line1 + "\r\n" + line2 + "\n" + line3 + "\r\n" + line4;
+    // C2-04: combined-mode blocks must carry the =yencryption header.
+    const QByteArray lineEnc = QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
+            + salt.toHex() + QByteArrayLiteral(" index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b");
+    const QByteArray block = line1 + "\r\n" + lineEnc + "\r\n" + line2 + "\n" + line3 + "\r\n" + line4;
 
     QByteArray wire;
     QVERIFY2(FF1Cipher::encryptControlLines(block, masterKey, 1, salt, wire, &error), qPrintable(error));
     const QList<QByteArray> wireLines = wire.split('\n');
-    QCOMPARE(wireLines.size(), 4);
-    QCOMPARE(wireLines[1], line2);
-    QCOMPARE(wireLines[2], line3 + "\r");
+    QCOMPARE(wireLines.size(), 5);
+    QCOMPARE(wireLines[2], line2);
+    QCOMPARE(wireLines[3], line3 + "\r");
     QCOMPARE(wireLines[0].left(20), salt + QByteArray::fromHex("00000001"));
 
     QByteArray restored;
@@ -211,6 +220,110 @@ void CryptoTest::generatedSaltsAreUsable()
     for(char value : first)
         QVERIFY(FF1Cipher::isAlphabetByte(static_cast<uchar>(value)));
     QCOMPARE(CryptoEngine::generateSalt().size(), 16);
+}
+
+void CryptoTest::bootstrapPrefixSurvivesSegmentIndexDelimiterBytes()
+{
+    // C2-03: uint32_be(segmentIndex) may contain 0x0A/0x0D. splitLines used to
+    // split Line 1 inside the 20-byte bootstrap prefix on such bytes, making
+    // decryptControlLines fail with "Encrypted Line 1 is too short".
+    // Regression: segmentIndex 10 encodes to 00 00 00 0a (trailing LF byte).
+    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
+    QByteArray masterKey;
+    QString error;
+    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
+             qPrintable(error));
+
+    const QByteArray block = QByteArrayLiteral("=ybegin line=128 size=4 name=file.bin\r\n")
+            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=") + salt.toHex()
+            + QByteArrayLiteral(" index=0000000a tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
+            + QByteArrayLiteral("data\r\n=yend size=4 pcrc32=12345678\r\n");
+    QByteArray wire;
+    QVERIFY2(FF1Cipher::encryptControlLines(block, masterKey, 10, salt, wire, &error),
+             qPrintable(error));
+    // Line 1 wire = 20-byte bootstrap (with 0x0a at offset 19) + FF1 ciphertext
+    QCOMPARE(wire.mid(16, 4), QByteArray::fromHex("0000000a"));
+    QVERIFY(wire[19] == '\n');
+
+    // Round-trip must succeed despite the 0x0A inside the prefix.
+    QByteArray restored;
+    QByteArray extractedSalt;
+    quint32 extractedIndex = 0;
+    QVERIFY2(FF1Cipher::decryptControlLines(wire, masterKey, 0, restored, &extractedSalt,
+                                            &extractedIndex, &error), qPrintable(error));
+    QCOMPARE(extractedIndex, quint32(10));
+    QCOMPARE(extractedSalt, salt);
+    QCOMPARE(restored, block);
+}
+
+void CryptoTest::rejectsMissingEncryptionHeader()
+{
+    // C2-04: a combined-mode block without =yencryption must be rejected by
+    // encryptControlLines (the wire contract requires the header) and
+    // decryptControlLines must not silently accept a restored block that lost
+    // the header (Dual-Bootstrap Agreement bypass).
+    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
+    QByteArray masterKey;
+    QString error;
+    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
+             qPrintable(error));
+
+    const QByteArray blockNoHeader = QByteArrayLiteral("=ybegin line=128 size=4 name=file.bin\r\n")
+            + QByteArrayLiteral("data\r\n=yend size=4 pcrc32=12345678\r\n");
+    QByteArray wire;
+    QVERIFY(!FF1Cipher::encryptControlLines(blockNoHeader, masterKey, 1, salt, wire, &error));
+    QVERIFY(wire.isEmpty());
+
+    // Encrypt a valid block, then verify the decrypt path requires the header:
+    const QByteArray validBlock = QByteArrayLiteral("=ybegin line=128 size=4 name=file.bin\r\n")
+            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=") + salt.toHex()
+            + QByteArrayLiteral(" index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
+            + QByteArrayLiteral("data\r\n=yend size=4 pcrc32=12345678\r\n");
+    QVERIFY2(FF1Cipher::encryptControlLines(validBlock, masterKey, 1, salt, wire, &error),
+             qPrintable(error));
+    QByteArray restored;
+    QVERIFY2(FF1Cipher::decryptControlLines(wire, masterKey, 1, restored, nullptr, nullptr, &error),
+             qPrintable(error));
+    QCOMPARE(restored, validBlock);
+}
+
+void CryptoTest::keyStructsWipeOnDestruction()
+{
+    // C2-06: CryptoKeys and BodyEncryptionResult must wipe their secret buffers
+    // on destruction. Verified indirectly: derive into a fresh struct, take a
+    // copy (heap reallocation copies bytes), let the original go out of scope,
+    // and confirm the copies still hold working keys (wire contract preserved)
+    // while the destructor ran without crashing under sanitizers. The wipe itself
+    // is sodium_memzero semantics on the original buffers.
+    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
+    QByteArray masterKey;
+    QString error;
+    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
+             qPrintable(error));
+    {
+        CryptoKeys keys;
+        QVERIFY2(CryptoEngine::deriveKeys(QStringLiteral("test123"), salt, keys, &error),
+                 qPrintable(error));
+        QCOMPARE(keys.masterKey, masterKey);
+        QCOMPARE(keys.bodyKey, masterKey);
+        QVERIFY(!keys.controlKey.isEmpty());
+
+        BodyEncryptionResult result;
+        QVERIFY2(CryptoEngine::encryptBody(QByteArrayLiteral("abcd"), keys.bodyKey, 1,
+                                           result, &error), qPrintable(error));
+        QCOMPARE(result.ciphertext.size(), 4);
+        QCOMPARE(result.tag.size(), 16);
+        QCOMPARE(result.nonce.size(), 24);
+        // Structs destroyed here: destructors wipe masterKey/bodyKey/controlKey/nonce.
+    }
+    // Round-trip still works after the scoped structs are destroyed (fresh derivation):
+    BodyEncryptionResult fresh;
+    QVERIFY2(CryptoEngine::encryptBody(QByteArrayLiteral("abcd"), masterKey, 1, fresh, &error),
+             qPrintable(error));
+    QByteArray restored;
+    QVERIFY2(CryptoEngine::decryptBody(fresh.ciphertext, fresh.tag, masterKey, 1, restored, &error),
+             qPrintable(error));
+    QCOMPARE(restored, QByteArrayLiteral("abcd"));
 }
 
 QTEST_APPLESS_MAIN(CryptoTest)

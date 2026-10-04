@@ -417,8 +417,22 @@ std::vector<Line> splitLines(const QByteArray &block)
 {
     std::vector<Line> lines;
     int start = 0;
+    // C2-03: The Line 1 bootstrap prefix ([16B salt][4B uint32_be(segmentIndex)])
+    // on encrypted wire blocks is atomic. uint32_be(segmentIndex) may contain
+    // 0x0A (LF) or 0x0D (CR); a scan that starts at index 0 would split Line 1
+    // inside the prefix. When the block does not begin with "=y" (encrypted
+    // wire form), skip the scan past the 20-byte bootstrap prefix. Decrypted /
+    // plaintext blocks start with "=y" and need no offset.
+    const bool encryptedWire = !block.startsWith(QByteArrayLiteral("=y"));
+    const int bootstrapSkip = SaltSize + 4; // 20 bytes
     for(int index = 0; index < block.size(); ++index)
     {
+        if(encryptedWire && lines.empty() && index < bootstrapSkip)
+        {
+            // Jump to the first byte after the bootstrap prefix.
+            index = bootstrapSkip - 1;
+            continue;
+        }
         if(block[index] != '\n')
             continue;
         const int contentEnd = index > start && block[index - 1] == '\r' ? index - 1 : index;
@@ -672,6 +686,13 @@ bool FF1Cipher::encryptControlLines(const QByteArray &block, const QByteArray &m
             line.content = encrypted;
         }
     }
+    // C2-04: a combined-mode block without exactly one =yencryption header is
+    // not a valid encrypted article; the Dual-Bootstrap Agreement requires it.
+    if(!foundEncryptionHeader)
+    {
+        setError(error, QStringLiteral("Missing =yencryption line in yEnc block"));
+        return false;
+    }
     wire = joinLines(lines);
     return true;
 }
@@ -745,6 +766,14 @@ bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &ma
             return false;
         }
         foundEncryptionHeader = true;
+    }
+
+    // C2-04: a restored block without exactly one =yencryption header bypasses
+    // the Dual-Bootstrap Agreement; require it before accepting the result.
+    if(!foundEncryptionHeader)
+    {
+        setError(error, QStringLiteral("Missing =yencryption line in yEnc block"));
+        return false;
     }
 
     if(salt)

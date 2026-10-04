@@ -72,6 +72,10 @@ bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encry
                             block, crc32, error))
         return false;
     block += QByteArrayLiteral(".\r\n");
+    // C2-07: release any previously allocated body before re-allocating so
+    // repeated yEncBody invocations never leak the earlier buffer.
+    delete[] _body;
+    _body = nullptr;
     _bodySize = block.size();
     _body = new char[block.size() + 1];
     std::memcpy(_body, block.constData(), static_cast<size_t>(block.size()));

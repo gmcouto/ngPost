@@ -114,7 +114,9 @@ qint64 Yenc::encode(const char data[], qint64 dataSize, uchar encbuffer[], quint
 
         case '\t' :
         case ' ' :
-            if(!column || column - 1 == maxwidth)
+            // C2-05: Escape space/tab at line boundaries (start or end of line).
+            // column + 1 == maxwidth identifies the last character before line wrap.
+            if(!column || column + 1 == maxwidth)
             {
                 ++column;
                 ++encSize;
@@ -193,7 +195,13 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
         setError(error, QStringLiteral("yEnc article payload is too large"));
         return false;
     }
-    QByteArray encoded(wirePayload.size() * 2 + 4, Qt::Uninitialized);
+    // C2-01: Worst-case encoded size accounts for per-byte escape expansion
+    // (up to 2x), CRLF line terminators emitted every maxwidth (128) encoded
+    // columns (up to size/32 additional bytes for fully escaped payloads),
+    // and the trailing '\0' written by encode().
+    const qint64 maxEncoded = static_cast<qint64>(wirePayload.size()) * 2
+                            + (static_cast<qint64>(wirePayload.size()) / 32) + 64;
+    QByteArray encoded(static_cast<int>(maxEncoded), Qt::Uninitialized);
     const qint64 encodedSize = encode(wirePayload.constData(), wirePayload.size(),
                                       reinterpret_cast<uchar *>(encoded.data()), wireCrc32);
     if(encodedSize <= 0)
@@ -221,7 +229,13 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
     }
     if(!encryptionLine.isEmpty())
         article += encryptionLine + QByteArrayLiteral("\r\n");
-    article += encoded + QByteArrayLiteral("\r\n=yend size=") + QByteArray::number(wirePayload.size());
+    // C2-02: Ensure exactly one CRLF delimiter precedes =yend. If encoded already ends
+    // with \r\n (which occurs when the encoded stream wraps on an exact 128-column boundary)
+    // or if encoded is empty (zero-byte payload), do not inject a blank line.
+    article += encoded;
+    if(!encoded.isEmpty() && !encoded.endsWith("\r\n"))
+        article += QByteArrayLiteral("\r\n");
+    article += QByteArrayLiteral("=yend size=") + QByteArray::number(wirePayload.size());
     if(encryptedSinglePart)
         article += QByteArrayLiteral(" crc32=");
     else
