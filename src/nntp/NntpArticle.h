@@ -118,7 +118,8 @@ void NntpArticle::freeMemory()
 {
     if (_subject)
     {
-        delete _subject;
+        // C1-04: _subject was allocated with new char[...], must use delete[]
+        delete[] _subject;
         _subject = nullptr;
     }
     if (_body)
