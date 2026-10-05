@@ -32,8 +32,13 @@ QByteArray hmacSha256(const QByteArray &key, const QByteArray &message)
 {
     unsigned int length = 0;
     unsigned char digest[EVP_MAX_MD_SIZE];
-    HMAC(EVP_sha256(), key.constData(), key.size(),
-         reinterpret_cast<const unsigned char *>(message.constData()), message.size(), digest, &length);
+    unsigned char *res = HMAC(EVP_sha256(), key.constData(), key.size(),
+                              reinterpret_cast<const unsigned char *>(message.constData()), message.size(), digest, &length);
+    if(!res || length != 32)
+    {
+        sodium_memzero(digest, sizeof(digest));
+        return QByteArray();
+    }
     QByteArray result(reinterpret_cast<const char *>(digest), static_cast<int>(length));
     sodium_memzero(digest, sizeof(digest));
     return result;
@@ -124,7 +129,7 @@ bool CryptoEngine::deriveKeys(const QString &password, const QByteArray &salt, C
     keys = CryptoKeys();
     if(!deriveKey(password, salt, keys.masterKey, error))
         return false;
-    keys.bodyKey = keys.masterKey;
+    keys.bodyKey = QByteArray(keys.masterKey.constData(), keys.masterKey.size());
     if(!deriveControlKey(keys.masterKey, keys.controlKey, error))
     {
         sodium_memzero(keys.masterKey.data(), static_cast<size_t>(keys.masterKey.size()));

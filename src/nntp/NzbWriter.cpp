@@ -3,9 +3,7 @@
 
 #include <QTextStream>
 
-namespace
-{
-QString xmlEscape(const QString &value)
+QString NzbWriter::xmlEscape(const QString &value)
 {
     QString escaped(value);
     escaped.replace('&', QStringLiteral("&amp;"));
@@ -14,7 +12,6 @@ QString xmlEscape(const QString &value)
     escaped.replace('"', QStringLiteral("&quot;"));
     escaped.replace('\'', QStringLiteral("&apos;"));
     return escaped;
-}
 }
 
 void NzbWriter::writeHead(QTextStream &stream, const QString &tab,

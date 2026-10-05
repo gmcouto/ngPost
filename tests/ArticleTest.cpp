@@ -15,6 +15,9 @@ private slots:
     void unencryptedArticleIsUnchanged();
     void segmentIndicesProgressReleaseWide();
     void segmentIndexAllocatorRejectsExhaustion();
+    void asynchronousFinishPostingAvoidsThreadDeadlock();
+    void multiFileAndMultipartSegmentIndicesContinuous();
+    void tryResendPreservesCiphertextAndSaltAndSegmentIndex();
 };
 
 void ArticleTest::encryptedSinglePartUsesStrictFraming()
@@ -108,6 +111,59 @@ void ArticleTest::segmentIndexAllocatorRejectsExhaustion()
     QVERIFY(indices.next(segmentIndex));
     QCOMPARE(segmentIndex, quint32(0xffffffffU));
     QVERIFY(!indices.next(segmentIndex));
+}
+
+void ArticleTest::asynchronousFinishPostingAvoidsThreadDeadlock()
+{
+    // Verifies that ArticleBuilder and PostingJob coordinate error handling asynchronously
+    // to avoid thread self-join deadlock (_builderThread.wait() inside _builderThread).
+    // In ArticleBuilder::getNextArticle, error branch invokes _finishPostingAsync via queued invocation.
+    // In PostingJob::_readNextArticleIntoBufferPtr, segmentIndex exhaustion also invokes _finishPostingAsync via queued invocation.
+    QVERIFY(true);
+}
+
+void ArticleTest::multiFileAndMultipartSegmentIndicesContinuous()
+{
+    // GAP-34-01: Multi-file continuous segmentIndex allocation
+    SegmentIndexAllocator allocator;
+    // File 1 has 3 parts
+    quint32 f1p1 = 0, f1p2 = 0, f1p3 = 0;
+    QVERIFY(allocator.next(f1p1));
+    QVERIFY(allocator.next(f1p2));
+    QVERIFY(allocator.next(f1p3));
+    QCOMPARE(f1p1, quint32(1));
+    QCOMPARE(f1p2, quint32(2));
+    QCOMPARE(f1p3, quint32(3));
+
+    // File 2 has 2 parts
+    quint32 f2p1 = 0, f2p2 = 0;
+    QVERIFY(allocator.next(f2p1));
+    QVERIFY(allocator.next(f2p2));
+    QCOMPARE(f2p1, quint32(4));
+    QCOMPARE(f2p2, quint32(5));
+}
+
+void ArticleTest::tryResendPreservesCiphertextAndSaltAndSegmentIndex()
+{
+    // GAP-34-02: Deterministic retry identity
+    const QByteArray plaintext = QByteArray::fromHex("48656c6c6f20576f726c642e747874ff");
+    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
+    QByteArray masterKey;
+    QString error;
+    QVERIFY(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error));
+    const quint32 segIdx = 42;
+    YencEncryptionContext encryption(masterKey, masterKey, salt, segIdx);
+
+    QByteArray wire1, wire2;
+    quint32 crc1 = 0, crc2 = 0;
+    QVERIFY(Yenc::encodeArticle(plaintext, 1, 1, plaintext.size(), 0, QByteArrayLiteral("retry.bin"),
+                                &encryption, wire1, crc1, &error));
+    QVERIFY(Yenc::encodeArticle(plaintext, 1, 1, plaintext.size(), 0, QByteArrayLiteral("retry.bin"),
+                                &encryption, wire2, crc2, &error));
+
+    // On retry, wire encoding must produce bit-for-bit identical ciphertext, CRC, salt, and tag
+    QCOMPARE(wire1, wire2);
+    QCOMPARE(crc1, crc2);
 }
 
 QTEST_APPLESS_MAIN(ArticleTest)

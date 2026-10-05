@@ -128,7 +128,7 @@ void NntpFile::writeToNZB(QTextStream &stream, const QString &from)
     if (_nbAticles)
     {
         QString tab = NgPost::space();
-        stream << tab << "<file poster=\"" << from << "\""
+        stream << tab << "<file poster=\"" << NzbWriter::xmlEscape(from) << "\""
 #if QT_VERSION >= QT_VERSION_CHECK(5, 8, 0)
                << " date=\"" << QDateTime::currentSecsSinceEpoch() << "\""
 #else

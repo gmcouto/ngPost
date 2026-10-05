@@ -15,6 +15,8 @@ private slots:
     void encryptedSegmentsIncludeExplicitIndices();
     void ordinarySegmentsRemainUnchanged();
     void validatesEncryptionSettings();
+    void posterFromHeaderIsXmlEscaped();
+    void secretRedactionSanity();
 };
 
 void NzbTest::encryptedHeadIncludesTransportMetadata()
@@ -105,6 +107,26 @@ void NzbTest::validatesEncryptionSettings()
     QVERIFY(!settings.validate(&error));
     settings.enabled = false;
     QVERIFY(settings.validate(&error));
+    settings.clearPassword();
+    QVERIFY(settings.password.isEmpty());
+}
+
+void NzbTest::posterFromHeaderIsXmlEscaped()
+{
+    const QString sender = QStringLiteral("Poster Name <poster@example.com>");
+    const QString escaped = NzbWriter::xmlEscape(sender);
+    QCOMPARE(escaped, QStringLiteral("Poster Name &lt;poster@example.com&gt;"));
+    QVERIFY(!escaped.contains('<'));
+    QVERIFY(!escaped.contains('>'));
+}
+
+void NzbTest::secretRedactionSanity()
+{
+    // GAP-34-05: Secret redaction in settings and strings
+    EncryptionSettings settings;
+    settings.enabled = true;
+    settings.password = QStringLiteral("SuperSecretPassword123!");
+    settings.controlLines = true;
     settings.clearPassword();
     QVERIFY(settings.password.isEmpty());
 }

@@ -411,6 +411,12 @@ void PostingJob::_postFiles()
 
         NzbWriter::writeHead(_nzbStream, tab, _ngPost->_meta, _rarPass,
                              _encryptionEnabled ? _encryptionPassword : QString());
+        if(_encryptionEnabled)
+        {
+            _encryptionPassword.detach();
+            _encryptionPassword.fill(QChar(0));
+            _encryptionPassword.clear();
+        }
         _nzbStream << MB_FLUSH;
     }
 
@@ -724,8 +730,7 @@ NntpArticle *PostingJob::_readNextArticleIntoBufferPtr(const QString &threadName
                 _error(_encryptionError);
                 _stopPosting = 0x1;
                 _noMoreFiles = 0x1;
-                _finishPosting();
-                emit postingFinished();
+                QMetaObject::invokeMethod(this, "_finishPostingAsync", Qt::QueuedConnection);
                 return nullptr;
             }
             NntpArticle *article = new NntpArticle(_nntpFile, _part, pos, bytesRead,
@@ -809,6 +814,12 @@ void PostingJob::_initPosting()
     }
     _nbArticlesTotal = static_cast<uint>(totalArticles);
     emit articlesNumber(_nbArticlesTotal);
+}
+
+void PostingJob::_finishPostingAsync()
+{
+    _finishPosting();
+    emit postingFinished();
 }
 
 void PostingJob::_finishPosting()

@@ -61,8 +61,7 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
             _job->_error(_job->_encryptionError);
             _job->_stopPosting = 0x1;
             _job->_noMoreFiles = 0x1;
-            _job->_finishPosting();
-            emit _job->postingFinished();
+            QMetaObject::invokeMethod(_job, "_finishPostingAsync", Qt::QueuedConnection);
             return nullptr;
         }
 

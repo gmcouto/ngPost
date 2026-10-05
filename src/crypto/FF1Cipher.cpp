@@ -641,7 +641,10 @@ bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &ma
     }
     lines.front().content = firstLine;
 
-    for(size_t offset = 1; offset + 1 < lines.size(); ++offset)
+    // Only probe candidate control lines at valid header offsets (e.g. offset 1 for =ypart)
+    // to avoid redundant AES rounds or accidental payload corruption on large articles.
+    const size_t maxProbeOffset = std::min<size_t>(lines.size() > 1 ? lines.size() - 2 : 0, 2);
+    for(size_t offset = 1; offset <= maxProbeOffset; ++offset)
     {
         QByteArray candidate;
         if(!decryptLine(lines[offset].content, masterKey, segmentIndex, static_cast<quint32>(offset + 1),

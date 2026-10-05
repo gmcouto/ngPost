@@ -17,6 +17,8 @@ private slots:
     void fullArticlePreservesDataAndFraming();
     void rejectsDualSaltMismatch();
     void generatedSaltsAreUsable();
+    void hmacAndKeyDerivationSanity();
+    void cryptographicEdgeCases();
 };
 
 void CryptoTest::argon2idVectors_data()
@@ -197,6 +199,58 @@ void CryptoTest::generatedSaltsAreUsable()
     for(char value : first)
         QVERIFY(FF1Cipher::isAlphabetByte(static_cast<uchar>(value)));
     QCOMPARE(CryptoEngine::generateSalt().size(), 16);
+}
+
+void CryptoTest::hmacAndKeyDerivationSanity()
+{
+    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
+    CryptoKeys keys;
+    QString error;
+    QVERIFY2(CryptoEngine::deriveKeys(QStringLiteral("test123"), salt, keys, &error), qPrintable(error));
+    QCOMPARE(keys.masterKey.size(), 32);
+    QCOMPARE(keys.bodyKey.size(), 32);
+    QCOMPARE(keys.controlKey.size(), 32);
+    QVERIFY(keys.masterKey != keys.controlKey);
+
+    QByteArray nonce;
+    QVERIFY2(CryptoEngine::deriveBodyNonce(keys.bodyKey, 1, nonce, &error), qPrintable(error));
+    QCOMPARE(nonce.size(), 24);
+
+    QByteArray tweak;
+    QVERIFY2(CryptoEngine::deriveControlTweak(keys.masterKey, 1, 1, tweak, &error), qPrintable(error));
+    QCOMPARE(tweak.size(), 8);
+}
+
+void CryptoTest::cryptographicEdgeCases()
+{
+    // GAP-34-06: Zero-payload, max uint32 index, and corrupted tag rejection
+    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
+    CryptoKeys keys;
+    QString error;
+    QVERIFY(CryptoEngine::deriveKeys(QStringLiteral("edgecases123"), salt, keys, &error));
+
+    // Zero-length payload encryption
+    const QByteArray emptyPlaintext;
+    BodyEncryptionResult emptyResult;
+    QVERIFY2(CryptoEngine::encryptBody(emptyPlaintext, keys.bodyKey, 1, emptyResult, &error),
+             qPrintable(error));
+    QCOMPARE(emptyResult.ciphertext.size(), 0);
+    QCOMPARE(emptyResult.tag.size(), 16);
+
+    // Max uint32 segment index
+    BodyEncryptionResult maxResult;
+    QVERIFY2(CryptoEngine::encryptBody(QByteArray("test"), keys.bodyKey, 0xffffffffU,
+                                       maxResult, &error), qPrintable(error));
+    QCOMPARE(maxResult.ciphertext.size(), 4);
+    QCOMPARE(maxResult.tag.size(), 16);
+
+    // Corrupted tag rejection
+    QByteArray corruptedTag = maxResult.tag;
+    corruptedTag[0] = static_cast<char>(corruptedTag[0] ^ 0x01);
+    QByteArray decrypted;
+    QVERIFY(!CryptoEngine::decryptBody(maxResult.ciphertext, corruptedTag, keys.bodyKey,
+                                       0xffffffffU, decrypted, &error));
+    QVERIFY(decrypted.isEmpty());
 }
 
 QTEST_APPLESS_MAIN(CryptoTest)

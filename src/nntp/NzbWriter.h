@@ -9,6 +9,7 @@ class QTextStream;
 class NzbWriter
 {
 public:
+    static QString xmlEscape(const QString &value);
     static void writeHead(QTextStream &stream, const QString &tab,
                           const QMap<QString, QString> &meta,
                           const QString &archivePassword = QString(),

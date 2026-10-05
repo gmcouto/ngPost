@@ -318,6 +318,7 @@ private:
     void _initPosting();
     void _postFiles();
     void _finishPosting();
+    Q_INVOKABLE void _finishPostingAsync();
 
     void _closeNzb();
     void _printStats() const;    
