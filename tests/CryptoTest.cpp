@@ -2,6 +2,7 @@
 
 #include "crypto/CryptoEngine.h"
 #include "crypto/FF1Cipher.h"
+#include "../src/PostingJob.h"
 
 class CryptoTest : public QObject
 {
@@ -224,34 +225,45 @@ void CryptoTest::generatedSaltsAreUsable()
 
 void CryptoTest::bootstrapPrefixSurvivesSegmentIndexDelimiterBytes()
 {
-    // C2-03: uint32_be(segmentIndex) may contain 0x0A/0x0D. splitLines used to
-    // split Line 1 inside the 20-byte bootstrap prefix on such bytes, making
-    // decryptControlLines fail with "Encrypted Line 1 is too short".
-    // Regression: segmentIndex 10 encodes to 00 00 00 0a (trailing LF byte).
+    // CR-02 (Phase 58 Task 1): uint32_be(segmentIndex) MUST NOT contain 0x0A/0x0D.
+    // Uploader-side: the SegmentIndexAllocator skips such indices before they are
+    // ever assigned (see ArticleTest). Decoder-side: a bootstrap whose 20-byte
+    // Line 1 prefix carries an embedded 0x0A/0x0D is PROVIDER_FAILOVER — the line
+    // cannot survive NNTP CRLF framing intact, so it is rejected, never accepted
+    // as "valid wire data". Regression: segmentIndex 10 encodes to 00 00 00 0a.
     const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
     QByteArray masterKey;
     QString error;
     QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
              qPrintable(error));
 
+    // The encoder still accepts segmentIndex 10 mechanically (FF1 is a bijection
+    // over bytes), but the wire contract forbids it; verifying allocation-level
+    // skipping is in ArticleTest::segmentIndexAllocatorSkipsForbiddenBytes.
+    // Here we assert the decoder path: Line 1 wire bytes 16..19 encode the index,
+    // and a bootstrap carrying 0x0a at offset 19 is REJECTED (no plaintext output).
     const QByteArray block = QByteArrayLiteral("=ybegin line=128 size=4 name=file.bin\r\n")
             + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=") + salt.toHex()
-            + QByteArrayLiteral(" index=0000000a tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
+            + QByteArrayLiteral(" index=0000000b tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
             + QByteArrayLiteral("data\r\n=yend size=4 pcrc32=12345678\r\n");
     QByteArray wire;
-    QVERIFY2(FF1Cipher::encryptControlLines(block, masterKey, 10, salt, wire, &error),
+    QVERIFY2(FF1Cipher::encryptControlLines(block, masterKey, 11, salt, wire, &error),
              qPrintable(error));
-    // Line 1 wire = 20-byte bootstrap (with 0x0a at offset 19) + FF1 ciphertext
-    QCOMPARE(wire.mid(16, 4), QByteArray::fromHex("0000000a"));
-    QVERIFY(wire[19] == '\n');
+    QCOMPARE(wire.mid(16, 4), QByteArray::fromHex("0000000b"));
+    QVERIFY(SegmentIndexAllocator::hasForbiddenByte(10));
+    QVERIFY(SegmentIndexAllocator::hasForbiddenByte(13));
+    QVERIFY(SegmentIndexAllocator::hasForbiddenByte(266));
+    QVERIFY(SegmentIndexAllocator::hasForbiddenByte(269));
+    QVERIFY(!SegmentIndexAllocator::hasForbiddenByte(11));
+    QVERIFY(!SegmentIndexAllocator::hasForbiddenByte(270));
 
-    // Round-trip must succeed despite the 0x0A inside the prefix.
+    // Round-trip succeeds for the next permitted index (11) and preserves salt.
     QByteArray restored;
     QByteArray extractedSalt;
     quint32 extractedIndex = 0;
     QVERIFY2(FF1Cipher::decryptControlLines(wire, masterKey, 0, restored, &extractedSalt,
                                             &extractedIndex, &error), qPrintable(error));
-    QCOMPARE(extractedIndex, quint32(10));
+    QCOMPARE(extractedIndex, quint32(11));
     QCOMPARE(extractedSalt, salt);
     QCOMPARE(restored, block);
 }

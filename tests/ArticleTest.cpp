@@ -15,6 +15,8 @@ private slots:
     void unencryptedArticleIsUnchanged();
     void segmentIndicesProgressReleaseWide();
     void segmentIndexAllocatorRejectsExhaustion();
+    // CR-02: allocator must skip indices whose uint32_be contains 0x0A/0x0D
+    void segmentIndexAllocatorSkipsForbiddenBytes();
     // C2-01: worst-case escape payloads must not overflow the encode buffer
     void worstCaseEscapePayloadDoesNotOverflow();
     // C2-02: exact-128-column wrap and empty payloads must not inject blank lines
@@ -123,6 +125,48 @@ void ArticleTest::segmentIndexAllocatorRejectsExhaustion()
     QVERIFY(indices.next(segmentIndex));
     QCOMPARE(segmentIndex, quint32(0xffffffffU));
     QVERIFY(!indices.next(segmentIndex));
+}
+
+void ArticleTest::segmentIndexAllocatorSkipsForbiddenBytes()
+{
+    // CR-02 (Phase 58 Task 1): indices whose uint32_be encoding contains 0x0A
+    // or 0x0D would split the Line 1 bootstrap on the wire and must be skipped.
+    // Canonical index_allocation.json (VEC-07) vectors: candidates 10, 13, 266, 269.
+    quint32 segmentIndex = 0;
+
+    // candidate 10 -> assigned 11
+    SegmentIndexAllocator skipTen(10);
+    QVERIFY(skipTen.next(segmentIndex));
+    QCOMPARE(segmentIndex, quint32(11));
+
+    // candidate 13 -> assigned 14
+    SegmentIndexAllocator skipThirteen(13);
+    QVERIFY(skipThirteen.next(segmentIndex));
+    QCOMPARE(segmentIndex, quint32(14));
+
+    // candidate 266 (0x0000010A) -> assigned 267
+    SegmentIndexAllocator skip266(266);
+    QVERIFY(skip266.next(segmentIndex));
+    QCOMPARE(segmentIndex, quint32(267));
+
+    // candidate 269 (0x0000010D) -> assigned 270
+    SegmentIndexAllocator skip269(269);
+    QVERIFY(skip269.next(segmentIndex));
+    QCOMPARE(segmentIndex, quint32(270));
+
+    // forbidden byte in any of the four positions
+    QVERIFY(SegmentIndexAllocator::hasForbiddenByte(0x0A000000U));
+    QVERIFY(SegmentIndexAllocator::hasForbiddenByte(0x000D0000U));
+    QVERIFY(!SegmentIndexAllocator::hasForbiddenByte(0xFFFFFFFFU));
+
+    // consecutive allocation crossing forbidden values: 8, 9 -> 11 (10 skipped)
+    SegmentIndexAllocator cross(8);
+    QVERIFY(cross.next(segmentIndex));
+    QCOMPARE(segmentIndex, quint32(8));
+    QVERIFY(cross.next(segmentIndex));
+    QCOMPARE(segmentIndex, quint32(9));
+    QVERIFY(cross.next(segmentIndex));
+    QCOMPARE(segmentIndex, quint32(11));
 }
 
 void ArticleTest::worstCaseEscapePayloadDoesNotOverflow()

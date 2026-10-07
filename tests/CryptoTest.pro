@@ -1,4 +1,4 @@
-QT += core testlib
+QT += core network testlib
 CONFIG += console c++14 testcase
 CONFIG -= app_bundle
 
