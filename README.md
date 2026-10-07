@@ -97,7 +97,6 @@ Syntax: ngPost (options)* (-i <file or folder> | --auto <folder> | --monitor <fo
 	-m or --meta       : extra meta data in header (typically "password=qwerty42")
 	--encrypt          : encrypt yEnc bodies and control lines
 	--encrypt-password : password for yEnc encryption (required with --encrypt)
-	--encrypt-control-lines: confirm control-line encryption (always on with --encrypt)
 	-f or --from       : poster email (random one if not provided)
 	-a or --article_size: article size (default one: 716800)
 	-z or --msg_id     : msg id signature, after the @ (default one: ngPost)
@@ -174,7 +173,6 @@ ngPost -h news.example.com -P 563 -s -u user -p pass -g alt.binaries.test -o out
 Flags:
 - `--encrypt`: Enables yEnc body and control-line encryption.
 - `--encrypt-password <PASS>`: Sets the encryption password (required with `--encrypt`).
-- `--encrypt-control-lines`: Confirms control-line encryption (always active when `--encrypt` is set).
 
 #### GUI and configuration file usage
 

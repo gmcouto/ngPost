@@ -115,7 +115,6 @@ const QMap<NgPost::Opt, QString> NgPost::sOptionNames =
     {Opt::META,         "meta"},
     {Opt::ENCRYPT,      "encrypt"},
     {Opt::ENCRYPT_PASSWORD, "encrypt-password"},
-    {Opt::ENCRYPT_CONTROL_LINES, "encrypt-control-lines"},
     {Opt::ARTICLE_SIZE, "article_size"},
     {Opt::FROM,         "from"},
     {Opt::GROUPS,       "groups"},
@@ -190,7 +189,6 @@ const QList<QCommandLineOption> NgPost::sCmdOptions = {
     {{"m", sOptionNames[Opt::META]},          tr("extra meta data in header (typically \"password=qwerty42\")"), sOptionNames[Opt::META]},
     { sOptionNames[Opt::ENCRYPT],              tr("encrypt yEnc bodies and control lines")},
     { sOptionNames[Opt::ENCRYPT_PASSWORD],     tr("password for yEnc encryption (requires --encrypt)"), sOptionNames[Opt::ENCRYPT_PASSWORD]},
-    { sOptionNames[Opt::ENCRYPT_CONTROL_LINES], tr("encrypt yEnc control lines (requires --encrypt)")},
     {{"f", sOptionNames[Opt::FROM]},          tr("poster email (random one if not provided)"), sOptionNames[Opt::FROM]},
     {{"a", sOptionNames[Opt::ARTICLE_SIZE]},  tr("article size (default one: %1)").arg(sDefaultArticleSize), sOptionNames[Opt::ARTICLE_SIZE]},
     {{"z", sOptionNames[Opt::MSG_ID]},        tr("msg id signature, after the @ (default one: %1)").arg(sDefaultMsgIdSignature), sOptionNames[Opt::MSG_ID]},
@@ -1481,20 +1479,18 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
     }
 
     const bool encryptionOptionSet = parser.isSet(sOptionNames[Opt::ENCRYPT])
-            || parser.isSet(sOptionNames[Opt::ENCRYPT_PASSWORD])
-            || parser.isSet(sOptionNames[Opt::ENCRYPT_CONTROL_LINES]);
+            || parser.isSet(sOptionNames[Opt::ENCRYPT_PASSWORD]);
     if(encryptionOptionSet)
     {
         if(!parser.isSet(sOptionNames[Opt::ENCRYPT]))
         {
-            _error(tr("Error syntax: --encrypt-password and --encrypt-control-lines require --encrypt"),
+            _error(tr("Error syntax: --encrypt-password requires --encrypt"),
                    ERROR_CODE::ERR_WRONG_ARG);
             return false;
         }
         _encryption.enabled = true;
         if(parser.isSet(sOptionNames[Opt::ENCRYPT_PASSWORD]))
             _encryption.password = parser.value(sOptionNames[Opt::ENCRYPT_PASSWORD]);
-        _encryption.controlLines = true;
         QString encryptionError;
         if(!_encryption.validate(&encryptionError))
         {
@@ -2073,11 +2069,6 @@ QString NgPost::_parseConfig(const QString &configPath)
                     }
                     else if (opt == sOptionNames[Opt::ENCRYPT_PASSWORD])
                         _encryption.password = args.join("=").trimmed();
-                    else if (opt == sOptionNames[Opt::ENCRYPT_CONTROL_LINES])
-                    {
-                        val = val.toLower();
-                        _encryption.controlLines = val == "true" || val == "on" || val == "1";
-                    }
                     else if (opt == sOptionNames[Opt::GROUP_POLICY])
                     {
                         val = val.toLower();

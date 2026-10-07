@@ -6,7 +6,6 @@
 struct EncryptionSettings
 {
     bool enabled = false;
-    bool controlLines = true;
     QString password;
 
     bool validate(QString *error = nullptr) const
@@ -15,12 +14,6 @@ struct EncryptionSettings
         {
             if(error)
                 *error = QStringLiteral("Encryption requires a non-empty password");
-            return false;
-        }
-        if(enabled && !controlLines)
-        {
-            if(error)
-                *error = QStringLiteral("Encryption requires control-line encryption");
             return false;
         }
         return true;
