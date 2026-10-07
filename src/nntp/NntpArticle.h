@@ -92,6 +92,8 @@ public:
     std::string header(const std::string &idSignature) const;
     inline std::string body() const;
     inline qint64 bodySize() const;
+    //! RFC 3977 §3.1.1: true if any body line starts with 0x2E (terminator exempt)
+    bool articleBodyNeedsDotStuffing() const;
     inline QString id() const;
     inline uint part() const;
     inline quint32 segmentIndex() const;

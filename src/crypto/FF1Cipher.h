@@ -24,6 +24,8 @@ public:
                                     QByteArray &block, QByteArray *salt, quint32 *extractedSegmentIndex,
                                     QString *error = nullptr);
     static bool isAlphabetByte(uchar value);
+    //! Strict canonical =yencryption grammar check (exactly 128 bytes, single-SP tokens)
+    static bool parseYencryptionLine(const QByteArray &line, QByteArray &salt, quint32 &segmentIndex, QByteArray *tag = nullptr);
 };
 
 #endif

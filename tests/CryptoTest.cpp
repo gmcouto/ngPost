@@ -1,5 +1,10 @@
 #include <QtTest>
 
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+
 #include "crypto/CryptoEngine.h"
 #include "crypto/FF1Cipher.h"
 #include "../src/PostingJob.h"
@@ -24,6 +29,13 @@ private slots:
     void rejectsMissingEncryptionHeader();
     // C2-06: destructor wipes must leave key buffers zeroed
     void keyStructsWipeOnDestruction();
+    // Phase 58 Task 11 (T11): vendored canonical conformance vectors
+    void vendoredManifestIntegrity();
+    void vendoredArgon2idVectors();
+    void vendoredNonceTweakVectors();
+    void vendoredBodyEncryptionVectors();
+    void vendoredGrammarMalformedVectors();
+    void vendoredIndexAllocationVectors();
 };
 
 void CryptoTest::argon2idVectors_data()
@@ -338,6 +350,173 @@ void CryptoTest::keyStructsWipeOnDestruction()
     QCOMPARE(restored, QByteArrayLiteral("abcd"));
 }
 
-QTEST_APPLESS_MAIN(CryptoTest)
+// ---------------------------------------------------------------------------
+// Phase 58 Task 11 (T11): vendored canonical conformance vectors.
+// All vectors are vendored byte-identical from the standards repository into
+// tests/test-vectors/ (self-containment constraint); the manifest checksums
+// gate drift.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+QByteArray readVectorFile(const char *name)
+{
+    QFile file(QStringLiteral("%1/test-vectors/%2").arg(QCoreApplication::applicationDirPath()).arg(name));
+    // qmake may run tests from the build dir; also try the source-relative path
+    if(!file.exists())
+        file.setFileName(QStringLiteral("test-vectors/%1").arg(name));
+    if(!file.open(QIODevice::ReadOnly))
+        qFatal("cannot open vector file: %s", qPrintable(file.fileName()));
+    return file.readAll();
+}
+
+QJsonObject loadVectorJson(const char *name)
+{
+    const QByteArray raw = readVectorFile(name);
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw, &parseError);
+    if(parseError.error != QJsonParseError::NoError)
+        qFatal("cannot parse vector file %s: %s", name, qPrintable(parseError.errorString()));
+    return doc.object();
+}
+} // namespace
+
+void CryptoTest::vendoredManifestIntegrity()
+{
+    const QByteArray manifestRaw = readVectorFile("manifest.json");
+    const QJsonObject manifest = QJsonDocument::fromJson(manifestRaw).object();
+    QCOMPARE(manifest.value(QStringLiteral("standard_version")).toString(), QStringLiteral("1.2"));
+    const QJsonObject files = manifest.value(QStringLiteral("files")).toObject();
+    QVERIFY(files.contains(QStringLiteral("argon2id.json")));
+    QVERIFY(files.contains(QStringLiteral("nonce_tweak.json")));
+    QVERIFY(files.contains(QStringLiteral("body_encryption.json")));
+    QVERIFY(files.contains(QStringLiteral("control_line_encryption.json")));
+    QVERIFY(files.contains(QStringLiteral("malformed_inputs.json")));
+    QVERIFY(files.contains(QStringLiteral("nzb_segment_identity.json")));
+    QVERIFY(files.contains(QStringLiteral("index_allocation.json")));
+
+    for(const QString &fileName : files.keys())
+    {
+        const QByteArray raw = readVectorFile(fileName.toUtf8().constData());
+        const QByteArray sha = QCryptographicHash::hash(raw, QCryptographicHash::Sha256).toHex();
+        const QJsonObject entry = files.value(fileName).toObject();
+        QCOMPARE(QString::fromLatin1(sha), entry.value(QStringLiteral("sha256")).toString());
+    }
+}
+
+void CryptoTest::vendoredArgon2idVectors()
+{
+    const QJsonArray vectors = loadVectorJson("argon2id.json").value(QStringLiteral("vectors")).toArray();
+    QCOMPARE(vectors.size(), 6);
+    for(const QJsonValue &value : vectors)
+    {
+        const QJsonObject vector = value.toObject();
+        QByteArray key;
+        QString error;
+        QVERIFY2(CryptoEngine::deriveKey(vector.value(QStringLiteral("password")).toString(),
+                                         QByteArray::fromHex(vector.value(QStringLiteral("salt_hex")).toString().toLatin1()),
+                                         key, &error), qPrintable(error));
+        QCOMPARE(key, QByteArray::fromHex(vector.value(QStringLiteral("expected_key_hex")).toString().toLatin1()));
+    }
+}
+
+void CryptoTest::vendoredNonceTweakVectors()
+{
+    const QJsonObject data = loadVectorJson("nonce_tweak.json");
+    const QByteArray bodyKey = QByteArray::fromHex(
+                data.value(QStringLiteral("body_nonce_vectors")).toArray().first().toObject()
+                    .value(QStringLiteral("key_hex")).toString().toLatin1());
+    for(const QJsonValue &value : data.value(QStringLiteral("body_nonce_vectors")).toArray())
+    {
+        const QJsonObject vector = value.toObject();
+        QByteArray nonce;
+        QString error;
+        QVERIFY2(CryptoEngine::deriveBodyNonce(bodyKey,
+                    static_cast<quint32>(vector.value(QStringLiteral("segment_index")).toVariant().toUInt()),
+                    nonce, &error), qPrintable(error));
+        QCOMPARE(nonce, QByteArray::fromHex(vector.value(QStringLiteral("expected_nonce_hex")).toString().toLatin1()));
+    }
+    for(const QJsonValue &value : data.value(QStringLiteral("control_tweak_vectors")).toArray())
+    {
+        const QJsonObject vector = value.toObject();
+        const QByteArray masterKey = QByteArray::fromHex(vector.value(QStringLiteral("master_key_hex")).toString().toLatin1());
+        QByteArray controlKey;
+        QByteArray tweak;
+        QString error;
+        QVERIFY2(CryptoEngine::deriveControlKey(masterKey, controlKey, &error), qPrintable(error));
+        QCOMPARE(controlKey, QByteArray::fromHex(vector.value(QStringLiteral("enc_key_hex")).toString().toLatin1()));
+        QVERIFY2(CryptoEngine::deriveControlTweak(masterKey,
+                    static_cast<quint32>(vector.value(QStringLiteral("segment_index")).toVariant().toUInt()),
+                    static_cast<quint32>(vector.value(QStringLiteral("line_index")).toVariant().toUInt()),
+                    tweak, &error), qPrintable(error));
+        QCOMPARE(tweak, QByteArray::fromHex(vector.value(QStringLiteral("expected_tweak_hex")).toString().toLatin1()));
+    }
+}
+
+void CryptoTest::vendoredBodyEncryptionVectors()
+{
+    const QJsonArray vectors = loadVectorJson("body_encryption.json").value(QStringLiteral("vectors")).toArray();
+    QCOMPARE(vectors.size(), 8);
+    for(const QJsonValue &value : vectors)
+    {
+        const QJsonObject vector = value.toObject();
+        const QByteArray key = QByteArray::fromHex(vector.value(QStringLiteral("derived_key_hex")).toString().toLatin1());
+        const quint32 segmentIndex = static_cast<quint32>(vector.value(QStringLiteral("segment_index")).toVariant().toUInt());
+        const QByteArray plaintext = QByteArray::fromHex(vector.value(QStringLiteral("plaintext_hex")).toString().toLatin1());
+        BodyEncryptionResult encrypted;
+        QString error;
+        QVERIFY2(CryptoEngine::encryptBody(plaintext, key, segmentIndex, encrypted, &error), qPrintable(error));
+        QCOMPARE(encrypted.ciphertext, QByteArray::fromHex(vector.value(QStringLiteral("expected_ciphertext_hex")).toString().toLatin1()));
+        QCOMPARE(encrypted.tag, QByteArray::fromHex(vector.value(QStringLiteral("expected_tag_hex")).toString().toLatin1()));
+        QCOMPARE(encrypted.nonce, QByteArray::fromHex(vector.value(QStringLiteral("derived_nonce_hex")).toString().toLatin1()));
+        QCOMPARE(vector.value(QStringLiteral("expected_yencryption_line")).toString(),
+                 QStringLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
+                     + vector.value(QStringLiteral("salt_hex")).toString()
+                     + QStringLiteral(" index=") + vector.value(QStringLiteral("expected_index_hex")).toString()
+                     + QStringLiteral(" tag=") + vector.value(QStringLiteral("expected_tag_hex")).toString());
+
+        QByteArray restored;
+        QVERIFY2(CryptoEngine::decryptBody(encrypted.ciphertext, encrypted.tag, key, segmentIndex, restored, &error),
+                 qPrintable(error));
+        QCOMPARE(restored, plaintext);
+    }
+}
+
+void CryptoTest::vendoredGrammarMalformedVectors()
+{
+    const QJsonArray vectors = loadVectorJson("malformed_inputs.json").value(QStringLiteral("vectors")).toArray();
+    for(const QJsonValue &value : vectors)
+    {
+        const QJsonObject vector = value.toObject();
+        const QString category = vector.value(QStringLiteral("category")).toString();
+        if(category != QStringLiteral("header_syntax"))
+            continue;
+        const QByteArray line(vector.value(QStringLiteral("input_line")).toString().toLatin1());
+        QByteArray salt;
+        quint32 segmentIndex = 0;
+        QByteArray tag;
+        // strict canonical grammar: every header_syntax vector must be rejected
+        QVERIFY2(!FF1Cipher::parseYencryptionLine(line, salt, segmentIndex, &tag),
+                 qPrintable(QStringLiteral("vector %1 must be rejected").arg(vector.value(QStringLiteral("id")).toString())));
+    }
+}
+
+void CryptoTest::vendoredIndexAllocationVectors()
+{
+    const QJsonArray vectors = loadVectorJson("index_allocation.json").value(QStringLiteral("vectors")).toArray();
+    QCOMPARE(vectors.size(), 4);
+    for(const QJsonValue &value : vectors)
+    {
+        const QJsonObject vector = value.toObject();
+        const quint32 candidate = static_cast<quint32>(vector.value(QStringLiteral("candidate_index")).toVariant().toUInt());
+        QVERIFY(SegmentIndexAllocator::hasForbiddenByte(candidate));
+        SegmentIndexAllocator allocator(candidate);
+        quint32 assigned = 0;
+        QVERIFY(allocator.next(assigned));
+        QCOMPARE(assigned, static_cast<quint32>(vector.value(QStringLiteral("expected_assigned_index")).toInt()));
+    }
+}
+
+QTEST_GUILESS_MAIN(CryptoTest)
 
 #include "CryptoTest.moc"

@@ -137,7 +137,45 @@ void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
     ++_nbTrySending;
     const std::string h = header(idSignature);
     con->write(h.data(), static_cast<qint64>(h.size()));
-    con->write(_body, _bodySize);
+    // RFC 3977 §3.1.1 dot-stuffing (Phase 58 Task 9): a body line whose first
+    // byte is 0x2E must have that byte doubled before the socket write, or the
+    // server strips it — corrupting e.g. the Line 1 bootstrap of encrypted
+    // articles. Applied to the BODY only: the header/protocol writes above are
+    // never stuffed. The trailing article terminator ("\r\n.\r\n") is exempt —
+    // it IS the terminator and must reach the server unstuffed.
+    if(_body && _bodySize > 0 && articleBodyNeedsDotStuffing())
+    {
+        static thread_local QByteArray stuffedBody;
+        stuffedBody.resize(static_cast<int>(_bodySize * 2));
+        qint64 outSize = 0;
+        bool atLineStart = true;
+        const qint64 terminatorPos = _bodySize - 3; // potential "\r\n.\r\n" suffix
+        for(qint64 i = 0; i < _bodySize; ++i)
+        {
+            const uchar byte = static_cast<uchar>(_body[i]);
+            if(atLineStart && byte == 0x2E && i != terminatorPos)
+                stuffedBody[static_cast<int>(outSize++)] = '.';
+            stuffedBody[static_cast<int>(outSize++)] = static_cast<char>(byte);
+            atLineStart = (byte == 0x0A);
+        }
+        con->write(stuffedBody.constData(), outSize);
+    }
+    else
+        con->write(_body, _bodySize);
+}
+
+bool NntpArticle::articleBodyNeedsDotStuffing() const
+{
+    bool atLineStart = true;
+    const qint64 terminatorPos = _bodySize - 3;
+    for(qint64 i = 0; i < _bodySize; ++i)
+    {
+        const uchar byte = static_cast<uchar>(_body[i]);
+        if(atLineStart && byte == 0x2E && i != terminatorPos)
+            return true;
+        atLineStart = (byte == 0x0A);
+    }
+    return false;
 }
 
 std::string NntpArticle::header(const std::string &idSignature) const

@@ -2,6 +2,8 @@
 
 #include "CryptoEngine.h"
 
+#include <QDebug>
+
 #include <openssl/bn.h>
 #include <openssl/evp.h>
 #include <sodium.h>
@@ -498,12 +500,22 @@ bool parseYencryptionLine(const QByteArray &line, QByteArray &salt, quint32 &seg
         *tag = QByteArray::fromHex(tagHex);
     return true;
 }
+
+bool parseYencryptionLinePublic(const QByteArray &line, QByteArray &salt, quint32 &segmentIndex, QByteArray *tag)
+{
+    return parseYencryptionLine(line, salt, segmentIndex, tag);
+}
 }
 
 bool FF1Cipher::isAlphabetByte(uchar value)
 {
     uchar numeral = 0;
     return byteToNumeral(value, numeral);
+}
+
+bool FF1Cipher::parseYencryptionLine(const QByteArray &line, QByteArray &salt, quint32 &segmentIndex, QByteArray *tag)
+{
+    return parseYencryptionLinePublic(line, salt, segmentIndex, tag);
 }
 
 bool FF1Cipher::encryptLine(const QByteArray &plaintext, const QByteArray &masterKey, quint32 segmentIndex,
@@ -728,14 +740,26 @@ bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &ma
 
     const quint32 effectiveSegmentIndex = extractedIndex;
 
+    // Phase 58 Task 7 (T-58-13): three-branch header-loop probe semantics.
+    //  - FF1 decryption error on a line in the header region → fail closed
+    //    (PROVIDER_FAILOVER, never data-line passthrough);
+    //  - success yielding non-`=y` content → first data line, loop terminates;
+    //  - success yielding `=y` content → restored control line, continue.
     for(size_t offset = 1; offset + 1 < lines.size(); ++offset)
     {
         QByteArray candidate;
+        QString probeError;
         if(!decryptLine(lines[offset].content, masterKey, effectiveSegmentIndex, static_cast<quint32>(offset + 1),
-                        candidate, nullptr, nullptr, nullptr))
-            continue;
-        if(isControlLine(candidate))
-            lines[offset].content = candidate;
+                        candidate, nullptr, nullptr, &probeError))
+        {
+            // fail closed: WARN without echoing secrets, no data-line passthrough
+            qWarning("FF1 header-region decryption failed (provider corruption); refusing to pass through as data line");
+            setError(error, QStringLiteral("FF1 header-region decryption failed (provider corruption)"));
+            return false;
+        }
+        if(!isControlLine(candidate))
+            break; // first data line — header region ends
+        lines[offset].content = candidate;
     }
 
     QByteArray finalLine;
