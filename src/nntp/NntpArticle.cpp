@@ -29,12 +29,13 @@
 ushort NntpArticle::sNbMaxTrySending = 5;
 
 NntpArticle::NntpArticle(NntpFile *file, uint part, qint64 pos, qint64 bytes,
-                         const std::string *from, bool obfuscation):
-    _nntpFile(file), _part(part),
+                         const std::string *from, bool obfuscation, quint32 segmentIndex):
+    _nntpFile(file), _part(part), _segmentIndex(segmentIndex),
     _id(QUuid::createUuid()),
     _from(from),
     _subject(nullptr),
     _body(nullptr),
+    _bodySize(0),
     _filePos(pos), _fileBytes(bytes),
     _nbTrySending(0),
     _msgId()
@@ -54,27 +55,32 @@ NntpArticle::NntpArticle(NntpFile *file, uint part, qint64 pos, qint64 bytes,
     }
 }
 
-void NntpArticle::yEncBody(const char data[])
+bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encryption, QString *error)
 {
-    // do the yEnc encoding
-    quint32 crc32    = 0xFFFFFFFF;
-    uchar  *yencBody = new uchar[_fileBytes*2];
-    Yenc::encode(data, _fileBytes, yencBody, crc32);
+    if(encryption && encryption->segmentIndex != _segmentIndex)
+    {
+        if(error)
+            *error = QStringLiteral("Article segment index does not match encryption context");
+        return false;
+    }
 
-    // format the body
-    std::stringstream ss;
-    ss << "=ybegin part=" << _part << " total=" << _nntpFile->nbArticles() << " line=128"
-       << " size=" << _nntpFile->fileSize() << " name=" << _nntpFile->fileName() << Nntp::ENDLINE
-       << "=ypart begin=" << _filePos + 1 << " end=" << _filePos + _fileBytes << Nntp::ENDLINE
-       << yencBody << Nntp::ENDLINE
-       << "=yend size=" << _fileBytes << " pcrc32=" << std::hex << crc32 << Nntp::ENDLINE
-       << "." << Nntp::ENDLINE;
-
-    delete[] yencBody;
-
-    std::string body = ss.str();
-    _body = new char[body.length()+1];
-    std::strcpy(_body, body.c_str());
+    QByteArray block;
+    quint32 crc32 = 0;
+    if(!Yenc::encodeArticle(QByteArray(data, static_cast<int>(_fileBytes)), _part,
+                            _nntpFile->nbArticles(), _nntpFile->fileSize(), _filePos,
+                            QByteArray::fromStdString(_nntpFile->fileName()), encryption,
+                            block, crc32, error))
+        return false;
+    block += QByteArrayLiteral(".\r\n");
+    // C2-07: release any previously allocated body before re-allocating so
+    // repeated yEncBody invocations never leak the earlier buffer.
+    delete[] _body;
+    _body = nullptr;
+    _bodySize = block.size();
+    _body = new char[block.size() + 1];
+    std::memcpy(_body, block.constData(), static_cast<size_t>(block.size()));
+    _body[block.size()] = '\0';
+    return true;
 }
 
 NntpArticle::~NntpArticle()
@@ -129,8 +135,47 @@ bool NntpArticle::tryResend()
 void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
 {
     ++_nbTrySending;
-    con->write(header(idSignature).c_str());
-    con->write(_body);
+    const std::string h = header(idSignature);
+    con->write(h.data(), static_cast<qint64>(h.size()));
+    // RFC 3977 §3.1.1 dot-stuffing (Phase 58 Task 9): a body line whose first
+    // byte is 0x2E must have that byte doubled before the socket write, or the
+    // server strips it — corrupting e.g. the Line 1 bootstrap of encrypted
+    // articles. Applied to the BODY only: the header/protocol writes above are
+    // never stuffed. The trailing article terminator ("\r\n.\r\n") is exempt —
+    // it IS the terminator and must reach the server unstuffed.
+    if(_body && _bodySize > 0 && articleBodyNeedsDotStuffing())
+    {
+        static thread_local QByteArray stuffedBody;
+        stuffedBody.resize(static_cast<int>(_bodySize * 2));
+        qint64 outSize = 0;
+        bool atLineStart = true;
+        const qint64 terminatorPos = _bodySize - 3; // potential "\r\n.\r\n" suffix
+        for(qint64 i = 0; i < _bodySize; ++i)
+        {
+            const uchar byte = static_cast<uchar>(_body[i]);
+            if(atLineStart && byte == 0x2E && i != terminatorPos)
+                stuffedBody[static_cast<int>(outSize++)] = '.';
+            stuffedBody[static_cast<int>(outSize++)] = static_cast<char>(byte);
+            atLineStart = (byte == 0x0A);
+        }
+        con->write(stuffedBody.constData(), outSize);
+    }
+    else
+        con->write(_body, _bodySize);
+}
+
+bool NntpArticle::articleBodyNeedsDotStuffing() const
+{
+    bool atLineStart = true;
+    const qint64 terminatorPos = _bodySize - 3;
+    for(qint64 i = 0; i < _bodySize; ++i)
+    {
+        const uchar byte = static_cast<uchar>(_body[i]);
+        if(atLineStart && byte == 0x2E && i != terminatorPos)
+            return true;
+        atLineStart = (byte == 0x0A);
+    }
+    return false;
 }
 
 std::string NntpArticle::header(const std::string &idSignature) const
@@ -160,7 +205,8 @@ void NntpArticle::dumpToFile(const QString &path, const std::string &articleIdSi
         return;
     }
 
-    file.write(header(articleIdSignature).c_str());
-    file.write(_body);
+    const std::string h = header(articleIdSignature);
+    file.write(h.data(), static_cast<qint64>(h.size()));
+    file.write(_body, _bodySize);
     file.close();
 }

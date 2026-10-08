@@ -1,0 +1,44 @@
+version: 2
+secret:
+  # ── Phase 56 (SEC-NGPOST-01): dummy credential literals certified in
+  #    56-AUDIT.md §4 — upstream documented placeholders, help-text examples,
+  #    and synthetic QtTest fixtures. Suppression-only (D-03); no sanitization.
+  ignored_matches:
+    - name: conf-default-user
+      match: myUser
+    - name: conf-default-pass
+      match: myPass
+    - name: proxy-ftp-placeholder
+      match: user:pass@
+    - name: encrypt-password-placeholder
+      match: yourPassword
+    - name: rar-pass-placeholder
+      match: myPassword
+    - name: help-text-qwerty42
+      match: qwerty42
+    - name: help-text-mysql-example
+      match: myDB
+    - name: test-nzb-archive-pass
+      match: archive-pass
+    - name: test-nzb-meta-pass
+      match: meta-pass
+    # NzbTest.cpp XML-escape fixtures: transport<&"pass, archive<&"pass, p<&"
+    # (single-quoted YAML — contains &" which double quotes treat specially)
+    - name: test-nzb-xml-escape-pass
+      match: 'p<&"'
+    # WR-01 fix: 'p<&"' is NOT a substring of the longer fixtures — suppress
+    # each full literal explicitly (single-quoted YAML).
+    - name: test-nzb-xml-escape-transport
+      match: 'transport<&"pass'
+    - name: test-nzb-xml-escape-archive
+      match: 'archive<&"pass'
+    # WR-03 fix: commented placeholder defaults in ngPost.conf:258-259
+    - name: conf-commented-other-user
+      match: myOtherUser
+    - name: conf-commented-other-pass
+      match: myOtherPass
+  ignored_paths:
+    # D-04 / T-56-03: vendor binaries — OpenSSL/Qt PEM format-string constants
+    # compiled into libcrypto-1_1-x64.dll / Qt5Network.dll inside the tracked
+    # release zips. Retain, suppress path only; never delete the zips.
+    - 'release/libs/**'

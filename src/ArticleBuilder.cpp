@@ -22,6 +22,8 @@
 #include "NgPost.h"
 #include "PostingJob.h"
 #include "nntp/NntpArticle.h"
+#include "nntp/NntpFile.h"
+#include "utils/Yenc.h"
 
 ArticleBuilder::ArticleBuilder(Poster *poster, QObject *parent):
     QObject (parent),
@@ -45,7 +47,28 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
     _job->_secureDiskAccess.unlock();
     if (article)
     {
-        article->yEncBody(_buffer);
+        QString error;
+        const YencEncryptionContext encryption(_job->_encryptionKeys.bodyKey,
+                                                _job->_encryptionKeys.masterKey,
+                                                _job->_encryptionSalt,
+                                                article->segmentIndex());
+        const YencEncryptionContext *encryptionPtr = _job->_encryptionEnabled ? &encryption : nullptr;
+        if(!article->yEncBody(_buffer, encryptionPtr, &error))
+        {
+            article->nntpFile()->removeArticle(article);
+            delete article;
+            _job->_encryptionError = QStringLiteral("Unable to encode article: %1").arg(error);
+            _job->_error(_job->_encryptionError);
+            _job->_stopPosting = 0x1;
+            _job->_noMoreFiles = 0x1;
+            // C1-01: _finishPosting() is a main-thread orchestrator (qApp->processEvents,
+            // thread joins) and must never run on this builder/connection thread.
+            // onStopPosting performs the same teardown+postingFinished pair, queued
+            // onto the PostingJob's own thread (see PostingJob.cpp stopPosting wiring).
+            emit _job->stopPosting();
+            return nullptr;
+        }
+
 #ifdef __SAVE_ARTICLES__
         article->dumpToFile("/tmp", _ngPost->aticleSignature());
 #endif
@@ -56,6 +79,11 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
 
 void ArticleBuilder::onPrepareNextArticle()
 {
+    // C1-05: early-return if stop requested; avoids reading/encoding articles
+    // after an error or shutdown signal has already been raised.
+    if (MB_LoadAtomic(_job->_stopPosting))
+        return;
+
     QMutexLocker lock(&_poster->_secureArticles); // thread safety (coming from _builderThread)
 
     NntpArticle *article = getNextArticle(_poster->_builderThread.objectName());

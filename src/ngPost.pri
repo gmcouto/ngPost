@@ -8,6 +8,24 @@ TEMPLATE = app
 CONFIG += c++14
 CONFIG -= app_bundle
 
+unix: LIBS += -largon2 -lsodium -lcrypto
+win32: LIBS += -largon2 -lsodium -llibcrypto
+
+unix: {
+    isEmpty(QMAKE_INCDIR_ARGON2) {
+        exists("/usr/include/argon2.h"): QMAKE_INCDIR_ARGON2 = /usr/include
+        exists("/usr/local/include/argon2.h"): QMAKE_INCDIR_ARGON2 = /usr/local/include
+    }
+    isEmpty(QMAKE_INCDIR_ARGON2): error("libargon2 headers not found. Install libargon2-dev (Debian/Ubuntu) or libargon2-devel (RHEL/Fedora).")
+    exists("/usr/include/sodium.h"): QMAKE_INCDIR_SODIUM = /usr/include
+    exists("/usr/local/include/sodium.h"): QMAKE_INCDIR_SODIUM = /usr/local/include
+    isEmpty(QMAKE_INCDIR_SODIUM): error("libsodium headers not found. Install libsodium-dev (Debian/Ubuntu) or libsodium-devel (RHEL/Fedora).")
+    exists("/usr/include/openssl/evp.h"): QMAKE_INCDIR_OPENSSL = /usr/include
+    exists("/usr/local/include/openssl/evp.h"): QMAKE_INCDIR_OPENSSL = /usr/local/include
+    isEmpty(QMAKE_INCDIR_OPENSSL): error("OpenSSL headers not found. Install libssl-dev (Debian/Ubuntu) or openssl-devel (RHEL/Fedora).")
+    INCLUDEPATH += $$QMAKE_INCDIR_ARGON2 $$QMAKE_INCDIR_SODIUM $$QMAKE_INCDIR_OPENSSL
+}
+
 DEFINES += __USE_CONNECTION_TIMEOUT__
 DEFINES += __COMPUTE_IMMEDIATE_SPEED__
 
@@ -70,6 +88,8 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 SOURCES += \
         ArticleBuilder.cpp \
+        crypto/CryptoEngine.cpp \
+        crypto/FF1Cipher.cpp \
         FileUploader.cpp \
         FoldersMonitorForNewFiles.cpp \
         NgPost.cpp \
@@ -82,6 +102,7 @@ SOURCES += \
         nntp/Nntp.cpp \
         nntp/NntpArticle.cpp \
         nntp/NntpFile.cpp \
+        nntp/NzbWriter.cpp \
         utils/CmdOrGuiApp.cpp \
         utils/Yenc.cpp
 
@@ -93,6 +114,9 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 HEADERS += \
     ArticleBuilder.h \
+    crypto/CryptoEngine.h \
+    crypto/FF1Cipher.h \
+    EncryptionSettings.h \
     FileUploader.h \
     FoldersMonitorForNewFiles.h \
     NgPost.h \
@@ -105,6 +129,7 @@ HEADERS += \
     nntp/NntpArticle.h \
     nntp/NntpFile.h \
     nntp/NntpServerParams.h \
+    nntp/NzbWriter.h \
     utils/CmdOrGuiApp.h \
     utils/Macros.h \
     utils/PureStaticClass.h \

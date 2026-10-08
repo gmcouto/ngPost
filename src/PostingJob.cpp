@@ -23,16 +23,19 @@
 #include "nntp/NntpServerParams.h"
 #include "nntp/NntpFile.h"
 #include "nntp/NntpArticle.h"
+#include "nntp/NzbWriter.h"
 #ifdef __USE_HMI__
   #include "hmi/PostingWidget.h"
 #endif
 #include <cmath>
+#include <limits>
 #include <QDebug>
 #include <QProcess>
 #include <QThread>
 #include <QMutex>
 #include <QCoreApplication>
 #include <QDir>
+#include <sodium.h>
 
 PostingJob::PostingJob(NgPost *ngPost,
                        const QString &nzbFilePath,
@@ -55,7 +58,8 @@ PostingJob::PostingJob(NgPost *ngPost,
                        bool keepRar,
                        bool delFilesAfterPost,
                        bool overwriteNzb,
-                       QObject *parent) :
+                       QObject *parent,
+                       const QString &encryptionPassword) :
     QObject (parent),
     _ngPost(ngPost), _files(files), _postWidget(postWidget),
 
@@ -82,6 +86,9 @@ PostingJob::PostingJob(NgPost *ngPost,
     _stopPosting(0x0), _noMoreFiles(0x0),
     _postStarted(false), _packed(false), _postFinished(false),
     _obfuscateArticles(obfuscateArticles), _obfuscateFileName(obfuscateFileName),
+    _encryptionEnabled(!encryptionPassword.isEmpty()), _encryptionPassword(encryptionPassword),
+    _encryptionSalt(), _encryptionKeys(),
+    _segmentIndices(), _encryptionError(),
     _delFilesAfterPost(delFilesAfterPost ? 0x1 : 0x0),
     _originalFiles(!postWidget || delFilesAfterPost  || obfuscateFileName ? files : QFileInfoList()),
     _secureDiskAccess(), _posters(),
@@ -121,6 +128,15 @@ PostingJob::PostingJob(NgPost *ngPost,
         connect(&_immediateSpeedTimer, &QTimer::timeout, this, &PostingJob::onImmediateSpeedComputation, Qt::QueuedConnection);
 #endif
 
+    if(_encryptionEnabled)
+    {
+        _encryptionSalt = CryptoEngine::generateControlSalt();
+        if(_encryptionSalt.size() != 16
+                || !CryptoEngine::deriveKeys(encryptionPassword, _encryptionSalt, _encryptionKeys,
+                                             &_encryptionError))
+            _encryptionError = QStringLiteral("Unable to initialize upload encryption");
+    }
+
     if (ngPost->debugMode())
         _log(NntpConnection::sslSupportInfo());
 }
@@ -158,6 +174,15 @@ PostingJob::~PostingJob()
         delete _nzb;
     if (_file)
         delete _file;
+    if(!_encryptionKeys.masterKey.isEmpty())
+        sodium_memzero(_encryptionKeys.masterKey.data(), static_cast<size_t>(_encryptionKeys.masterKey.size()));
+    if(!_encryptionKeys.bodyKey.isEmpty())
+        sodium_memzero(_encryptionKeys.bodyKey.data(), static_cast<size_t>(_encryptionKeys.bodyKey.size()));
+    if(!_encryptionKeys.controlKey.isEmpty())
+        sodium_memzero(_encryptionKeys.controlKey.data(), static_cast<size_t>(_encryptionKeys.controlKey.size()));
+    _encryptionPassword.detach();
+    _encryptionPassword.fill(QChar(0));
+    _encryptionPassword.clear();
 }
 
 void PostingJob::pause()
@@ -226,6 +251,12 @@ void PostingJob::onImmediateSpeedComputation()
 void PostingJob::onStartPosting(bool isActiveJob)
 {
     _isActiveJob = isActiveJob;
+    if(_encryptionEnabled && !_encryptionError.isEmpty())
+    {
+        _error(_encryptionError);
+        emit postingFinished();
+        return;
+    }
 #ifdef __DEBUG__
 qDebug() << "[MB_TRACE][Issue#82][PostingJob::onStartPosting] job: " << this
          << ", file: " << nzbName() << " (isActive: " << isActiveJob << ")";
@@ -344,6 +375,12 @@ void PostingJob::_postFiles()
         emit archiveFileNames(archiveNames);
     }
     _initPosting();
+    if(MB_LoadAtomic(_stopPosting))
+    {
+        _finishPosting();
+        emit postingFinished();
+        return;
+    }
 
     if (_nbThreads > QThread::idealThreadCount())
         _nbThreads = QThread::idealThreadCount();
@@ -372,15 +409,8 @@ void PostingJob::_postFiles()
                    << "<!DOCTYPE nzb PUBLIC \"-//newzBin//DTD NZB 1.1//EN\" \"http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd\">\n"
                    << "<nzb xmlns=\"http://www.newzbin.com/DTD/2003/nzb\">\n";
 
-        if (!_rarPass.isEmpty() || _ngPost->_meta.size())
-        {
-            _nzbStream << tab << "<head>\n";
-            for (auto itMeta = _ngPost->_meta.cbegin(); itMeta != _ngPost->_meta.cend() ; ++itMeta)
-                _nzbStream << tab << tab << "<meta type=\"" << itMeta.key() << "\">" << itMeta.value() << "</meta>\n";
-            if (!_rarPass.isEmpty())
-                _nzbStream << tab << tab << "<meta type=\"password\">" << _rarPass << "</meta>\n";
-            _nzbStream << tab << "</head>\n\n";
-        }
+        NzbWriter::writeHead(_nzbStream, tab, _ngPost->_meta, _rarPass,
+                             _encryptionEnabled ? _encryptionPassword : QString());
         _nzbStream << MB_FLUSH;
     }
 
@@ -687,9 +717,22 @@ NntpArticle *PostingJob::_readNextArticleIntoBufferPtr(const QString &threadName
             if (_ngPost->debugFull())
                 _log(tr("[%1] we've read %2 bytes from %3 (=> new pos: %4)").arg(threadName).arg(bytesRead).arg(pos).arg(_file->pos()));
             ++_part;
+            quint32 segmentIndex = 0;
+            if(_encryptionEnabled && !_segmentIndices.next(segmentIndex))
+            {
+                _encryptionError = QStringLiteral("Encrypted release exceeds segmentIndex range");
+                _error(_encryptionError);
+                _stopPosting = 0x1;
+                _noMoreFiles = 0x1;
+                // C1-01: this runs on a worker thread holding _secureDiskAccess;
+                // queue the teardown to the PostingJob's own thread via onStopPosting
+                // (never join threads or pump the event loop from a worker).
+                emit stopPosting();
+                return nullptr;
+            }
             NntpArticle *article = new NntpArticle(_nntpFile, _part, pos, bytesRead,
                                                    _obfuscateArticles ? nullptr : &_from,
-                                                   _obfuscateArticles);
+                                                   _obfuscateArticles, segmentIndex);
             return article;
         }
         else
@@ -741,6 +784,7 @@ void PostingJob::_initPosting()
     _filesToUpload.reserve(static_cast<int>(_nbFiles));
     uint fileNum = 0;
     int nbGroups = _grpList.size();
+    quint64 totalArticles = 0;
     for (const QFileInfo &file : _files)
     {
         NntpFile *nntpFile = new NntpFile(this,
@@ -756,8 +800,16 @@ void PostingJob::_initPosting()
             connect(nntpFile, &NntpFile::startPosting, this, &PostingJob::onNntpFileStartPosting, Qt::QueuedConnection);
 
         _filesToUpload.enqueue(nntpFile);
-        _nbArticlesTotal += nntpFile->nbArticles();
+        totalArticles += nntpFile->nbArticles();
     }
+    if(_encryptionEnabled && totalArticles > std::numeric_limits<quint32>::max())
+    {
+        _encryptionError = QStringLiteral("Encrypted release exceeds segmentIndex range");
+        _error(_encryptionError);
+        _stopPosting = 0x1;
+        _noMoreFiles = 0x1;
+    }
+    _nbArticlesTotal = static_cast<uint>(totalArticles);
     emit articlesNumber(_nbArticlesTotal);
 }
 
