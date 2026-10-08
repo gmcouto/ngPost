@@ -120,7 +120,7 @@ void NntpArticle::freeMemory()
 {
     if (_subject)
     {
-        delete _subject;
+        delete[] _subject;
         _subject = nullptr;
     }
     if (_body)

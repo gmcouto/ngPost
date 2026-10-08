@@ -2701,7 +2701,6 @@ void NgPost::saveConfig()
                << tr("## Set ENCRYPT-PASSWORD separately after saving; passwords are never written by the GUI") << "\n"
                << "#ENCRYPT = true\n"
                << "#ENCRYPT-PASSWORD = yourPassword\n"
-               << "#ENCRYPT-CONTROL-LINES = true\n"
                << "\n"
                << tr("## remove accents and special characters from the nzb file names") << "\n"
                << (_removeAccentsOnNzbFileName  ? "" : "#") << "NZB_RM_ACCENTS = true\n"

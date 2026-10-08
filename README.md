@@ -182,7 +182,6 @@ In `ngPost.conf` or `~/.ngPost`, configure the encryption parameters:
 ## yEnc transport encryption is opt-in and always protects both bodies and control lines
 ENCRYPT = true
 ENCRYPT-PASSWORD = yourPassword
-ENCRYPT-CONTROL-LINES = true
 ```
 
 *Note:* For security, the desktop GUI does not write passwords into saved configuration files. Set `ENCRYPT-PASSWORD` manually in your configuration file.
