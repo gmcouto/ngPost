@@ -49,11 +49,20 @@ struct CryptoKeys
     void clear()
     {
         if(!masterKey.isEmpty())
+        {
             sodium_memzero(masterKey.data(), static_cast<size_t>(masterKey.size()));
+            masterKey.clear();
+        }
         if(!bodyKey.isEmpty())
+        {
             sodium_memzero(bodyKey.data(), static_cast<size_t>(bodyKey.size()));
+            bodyKey.clear();
+        }
         if(!controlKey.isEmpty())
+        {
             sodium_memzero(controlKey.data(), static_cast<size_t>(controlKey.size()));
+            controlKey.clear();
+        }
     }
 };
 

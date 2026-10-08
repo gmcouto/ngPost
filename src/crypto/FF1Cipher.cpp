@@ -617,6 +617,15 @@ bool FF1Cipher::decryptLine(const QByteArray &wire, const QByteArray &masterKey,
             setError(error, QStringLiteral("Extracted segmentIndex must be non-zero"));
             return false;
         }
+        for(int shift = 24; shift >= 0; shift -= 8)
+        {
+            const uchar b = static_cast<uchar>((extractedIndex >> shift) & 0xFF);
+            if(b == 0x0A || b == 0x0D)
+            {
+                setError(error, QStringLiteral("Line 1 segmentIndex contains forbidden delimiter byte"));
+                return false;
+            }
+        }
         if(segmentIndex != 0 && extractedIndex != segmentIndex)
         {
             setError(error, QStringLiteral("segmentIndex mismatch on Line 1"));
@@ -772,31 +781,57 @@ bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &ma
     }
     lines.back().content = finalLine;
 
-    bool foundEncryptionHeader = false;
-    for(const Line &line : lines)
+    const bool isMultipart = firstLine.contains(" part=") || (lines.size() > 1 && matchesControlLine(lines[1].content, QByteArrayLiteral("=ypart")));
+    size_t expectedYencIndex = 0;
+    if(isMultipart)
     {
-        if(!matchesControlLine(line.content, QByteArrayLiteral("=yencryption")))
-            continue;
-        if(foundEncryptionHeader)
+        if(lines.size() < 4)
         {
-            setError(error, QStringLiteral("yEnc block contains duplicate =yencryption lines"));
+            setError(error, QStringLiteral("Multipart yEnc block is too short"));
             return false;
         }
-        QByteArray headerSalt;
-        quint32 headerIndex = 0;
-        if(!parseYencryptionLine(line.content, headerSalt, headerIndex) || headerSalt != extractedSalt || headerIndex != extractedIndex)
+        if(!matchesControlLine(lines[1].content, QByteArrayLiteral("=ypart")))
         {
-            setError(error, QStringLiteral("Line 1 salt and =yencryption salt must match"));
+            setError(error, QStringLiteral("Multipart yEnc block requires =ypart at physical line 2"));
             return false;
         }
-        foundEncryptionHeader = true;
+        if(!matchesControlLine(lines[2].content, QByteArrayLiteral("=yencryption")))
+        {
+            setError(error, QStringLiteral("Multipart yEnc block requires =yencryption at physical line 3"));
+            return false;
+        }
+        expectedYencIndex = 2;
+    }
+    else
+    {
+        if(lines.size() < 3)
+        {
+            setError(error, QStringLiteral("Single-part yEnc block is too short"));
+            return false;
+        }
+        if(!matchesControlLine(lines[1].content, QByteArrayLiteral("=yencryption")))
+        {
+            setError(error, QStringLiteral("Single-part yEnc block requires =yencryption at physical line 2"));
+            return false;
+        }
+        expectedYencIndex = 1;
     }
 
-    // C2-04: a restored block without exactly one =yencryption header bypasses
-    // the Dual-Bootstrap Agreement; require it before accepting the result.
-    if(!foundEncryptionHeader)
+    // Ensure no other =yencryption line exists in the entire block
+    for(size_t i = 0; i < lines.size(); ++i)
     {
-        setError(error, QStringLiteral("Missing =yencryption line in yEnc block"));
+        if(i != expectedYencIndex && matchesControlLine(lines[i].content, QByteArrayLiteral("=yencryption")))
+        {
+            setError(error, QStringLiteral("yEnc block contains duplicate or misplaced =yencryption lines"));
+            return false;
+        }
+    }
+
+    QByteArray headerSalt;
+    quint32 headerIndex = 0;
+    if(!parseYencryptionLine(lines[expectedYencIndex].content, headerSalt, headerIndex) || headerSalt != extractedSalt || headerIndex != extractedIndex)
+    {
+        setError(error, QStringLiteral("Line 1 salt and =yencryption salt must match"));
         return false;
     }
 

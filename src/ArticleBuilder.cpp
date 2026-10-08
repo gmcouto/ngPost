@@ -55,7 +55,9 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
         const YencEncryptionContext *encryptionPtr = _job->_encryptionEnabled ? &encryption : nullptr;
         if(!article->yEncBody(_buffer, encryptionPtr, &error))
         {
+            _job->_secureDiskAccess.lock();
             article->nntpFile()->removeArticle(article);
+            _job->_secureDiskAccess.unlock();
             delete article;
             _job->_encryptionError = QStringLiteral("Unable to encode article: %1").arg(error);
             _job->_error(_job->_encryptionError);
