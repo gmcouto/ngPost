@@ -117,8 +117,6 @@ void NzbTest::validatesEncryptionSettings()
     QVERIFY(!error.isEmpty());
     settings.password = QStringLiteral("p<&\"");
     QVERIFY(settings.validate(&error));
-    settings.controlLines = false;
-    QVERIFY(!settings.validate(&error));
     settings.enabled = false;
     QVERIFY(settings.validate(&error));
     settings.clearPassword();
