@@ -159,6 +159,8 @@ void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
             atLineStart = (byte == 0x0A);
         }
         con->write(stuffedBody.constData(), outSize);
+        stuffedBody.clear();
+        stuffedBody.squeeze();
     }
     else
         con->write(_body, _bodySize);
