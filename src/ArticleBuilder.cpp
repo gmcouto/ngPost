@@ -76,7 +76,7 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
             _job->_error(_job->_encryptionError);
             _job->_stopPosting = 0x1;
             _job->_noMoreFiles = 0x1;
-            // C1-01: _finishPosting() is a main-thread orchestrator (qApp->processEvents,
+            // _finishPosting() is a main-thread orchestrator (qApp->processEvents,
             // thread joins) and must never run on this builder/connection thread.
             // onStopPosting performs the same teardown+postingFinished pair, queued
             // onto the PostingJob's own thread (see PostingJob.cpp stopPosting wiring).
@@ -94,7 +94,7 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
 
 void ArticleBuilder::onPrepareNextArticle()
 {
-    // C1-05: early-return if stop requested; avoids reading/encoding articles
+    // Early-return if stop requested; avoids reading/encoding articles
     // after an error or shutdown signal has already been raised.
     if (MB_LoadAtomic(_job->_stopPosting))
         return;

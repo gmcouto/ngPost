@@ -72,7 +72,7 @@ bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encry
                             block, crc32, error))
         return false;
     block += QByteArrayLiteral(".\r\n");
-    // C2-07: release any previously allocated body before re-allocating so
+    // Release any previously allocated body before re-allocating so
     // repeated yEncBody invocations never leak the earlier buffer.
     delete[] _body;
     _body = nullptr;
@@ -137,7 +137,7 @@ void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
     ++_nbTrySending;
     const std::string h = header(idSignature);
     con->write(h.data(), static_cast<qint64>(h.size()));
-    // RFC 3977 §3.1.1 dot-stuffing (Phase 58 Task 9): a body line whose first
+    // RFC 3977 §3.1.1 dot-stuffing: a body line whose first
     // byte is 0x2E must have that byte doubled before the socket write, or the
     // server strips it — corrupting e.g. the Line 1 bootstrap of encrypted
     // articles. Applied to the BODY only: the header/protocol writes above are

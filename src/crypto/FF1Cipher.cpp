@@ -419,7 +419,7 @@ std::vector<Line> splitLines(const QByteArray &block)
 {
     std::vector<Line> lines;
     int start = 0;
-    // C2-03: The Line 1 bootstrap prefix ([16B salt][4B uint32_be(segmentIndex)])
+    // The Line 1 bootstrap prefix ([16B salt][4B uint32_be(segmentIndex)])
     // on encrypted wire blocks is atomic. uint32_be(segmentIndex) may contain
     // 0x0A (LF) or 0x0D (CR); a scan that starts at index 0 would split Line 1
     // inside the prefix. When the block does not begin with "=y" (encrypted
@@ -707,7 +707,7 @@ bool FF1Cipher::encryptControlLines(const QByteArray &block, const QByteArray &m
             line.content = encrypted;
         }
     }
-    // C2-04: a combined-mode block without exactly one =yencryption header is
+    // A combined-mode block without exactly one =yencryption header is
     // not a valid encrypted article; the Dual-Bootstrap Agreement requires it.
     if(!foundEncryptionHeader)
     {
@@ -749,7 +749,7 @@ bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &ma
 
     const quint32 effectiveSegmentIndex = extractedIndex;
 
-    // Phase 58 Task 7 (T-58-13): three-branch header-loop probe semantics.
+    // Three-branch header-loop probe semantics.
     //  - FF1 decryption error on a line in the header region → fail closed
     //    (PROVIDER_FAILOVER, never data-line passthrough);
     //  - success yielding non-`=y` content → first data line, loop terminates;

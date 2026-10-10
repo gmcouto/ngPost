@@ -48,7 +48,7 @@ private:
     quint32 _next;
 
 public:
-    // CR-02: an index whose uint32_be encoding contains 0x0A or 0x0D would split
+    // Index framing rule: an index whose uint32_be encoding contains 0x0A or 0x0D would split
     // the Line 1 bootstrap on the wire and is forbidden; skip such indices.
     static bool hasForbiddenByte(quint32 index)
     {

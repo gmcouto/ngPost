@@ -14,7 +14,7 @@ public:
                           const QString &archivePassword = QString(),
                           const QString &encryptionPassword = QString());
     static void writeSegment(QTextStream &stream, const QString &tab, qint64 bytes, uint number,
-                             const QString &messageId, quint32 segmentIndex = 0);
+                             const QString &messageId);
 };
 
 #endif

@@ -15,13 +15,13 @@ private slots:
     void unencryptedArticleIsUnchanged();
     void segmentIndicesProgressReleaseWide();
     void segmentIndexAllocatorRejectsExhaustion();
-    // CR-02: allocator must skip indices whose uint32_be contains 0x0A/0x0D
+    // Index framing rule: allocator must skip indices whose uint32_be contains 0x0A/0x0D
     void segmentIndexAllocatorSkipsForbiddenBytes();
-    // C2-01: worst-case escape payloads must not overflow the encode buffer
+    // Worst-case escape payloads must not overflow the encode buffer
     void worstCaseEscapePayloadDoesNotOverflow();
-    // C2-02: exact-128-column wrap and empty payloads must not inject blank lines
+    // Exact-128-column wrap and empty payloads must not inject blank lines
     void exactWrapAndEmptyPayloadPreserveSingleCrlf();
-    // C2-05: trailing whitespace at end of line must be escaped
+    // Trailing whitespace at end of line must be escaped
     void trailingWhitespaceAtLineEndIsEscaped();
 };
 
@@ -129,7 +129,7 @@ void ArticleTest::segmentIndexAllocatorRejectsExhaustion()
 
 void ArticleTest::segmentIndexAllocatorSkipsForbiddenBytes()
 {
-    // CR-02 (Phase 58 Task 1): indices whose uint32_be encoding contains 0x0A
+    // Index framing rule: indices whose uint32_be encoding contains 0x0A
     // or 0x0D would split the Line 1 bootstrap on the wire and must be skipped.
     // Canonical index_allocation.json (VEC-07) vectors: candidates 10, 13, 266, 269.
     quint32 segmentIndex = 0;
@@ -171,7 +171,7 @@ void ArticleTest::segmentIndexAllocatorSkipsForbiddenBytes()
 
 void ArticleTest::worstCaseEscapePayloadDoesNotOverflow()
 {
-    // C2-01: a payload of bytes that all require escaping (0xD6 -> (0xD6+42)&0xFF == 0x00,
+    // A payload of bytes that all require escaping (0xD6 -> (0xD6+42)&0xFF == 0x00,
     // 0xED -> '=', 0x00 -> '\n') used to overflow the encode destination buffer
     // (size*2+4) because CRLF line terminators were not budgeted. The fixed
     // allocation covers 2N + N/32 + 64 bytes; this test fails under the old
@@ -215,7 +215,7 @@ void ArticleTest::worstCaseEscapePayloadDoesNotOverflow()
 
 void ArticleTest::exactWrapAndEmptyPayloadPreserveSingleCrlf()
 {
-    // C2-02: when the encoded stream wraps exactly on a 128-column boundary the
+    // When the encoded stream wraps exactly on a 128-column boundary the
     // old code emitted a double CRLF (blank line) before =yend; a zero-byte
     // payload did the same. Downstream FF1 tweak derivation counts physical
     // lines, so a blank line desynchronized the =yend tweak.
@@ -260,7 +260,7 @@ void ArticleTest::exactWrapAndEmptyPayloadPreserveSingleCrlf()
 
 void ArticleTest::trailingWhitespaceAtLineEndIsEscaped()
 {
-    // C2-05: the yEnc escape rule applies to OUTPUT byte values 0x20/0x09 at
+    // The yEnc escape rule applies to OUTPUT byte values 0x20/0x09 at
     // line boundaries. Output space (0x20) comes from input byte 246 (0xF6),
     // output tab (0x09) from input byte 223 (0xDF). A raw output space at the
     // final column before a line wrap must be '='-escaped; the old condition

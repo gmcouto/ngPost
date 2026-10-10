@@ -45,7 +45,7 @@ struct CryptoKeys
         return *this;
     }
 
-    // C2-06: wipe sensitive key material so keys never linger in heap memory.
+    // Wipe sensitive key material so keys never linger in heap memory.
     void clear()
     {
         if(!masterKey.isEmpty())
@@ -104,7 +104,7 @@ struct BodyEncryptionResult
         return *this;
     }
 
-    // C2-06: wipe the derived nonce on destruction.
+    // Wipe the derived nonce on destruction.
     void clear()
     {
         if(!nonce.isEmpty())

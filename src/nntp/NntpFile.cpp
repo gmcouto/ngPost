@@ -148,7 +148,7 @@ void NntpFile::writeToNZB(QTextStream &stream, const QString &from)
         for (NntpArticle *article : _articles)
         {
             NzbWriter::writeSegment(stream, tab + tab + tab, article->_fileBytes,
-                                    article->_part, article->_msgId, article->_segmentIndex);
+                                    article->_part, article->_msgId);
 
         }
         stream << tab << tab << "</segments>\n";

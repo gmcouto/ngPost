@@ -785,7 +785,7 @@ NntpArticle *PostingJob::_readNextArticleIntoBufferPtr(const QString &threadName
                 _error(_encryptionError);
                 _stopPosting = 0x1;
                 _noMoreFiles = 0x1;
-                // C1-01: this runs on a worker thread holding _secureDiskAccess;
+                // This runs on a worker thread holding _secureDiskAccess;
                 // queue the teardown to the PostingJob's own thread via onStopPosting
                 // (never join threads or pump the event loop from a worker).
                 emit stopPosting();

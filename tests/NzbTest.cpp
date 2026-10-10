@@ -13,8 +13,7 @@ private slots:
     void ordinaryHeadPreservesArchiveMetadataWithoutDuplicatePassword();
     void writerOwnsEscapingForRawMetadata();
     void writerRejectsInjectionAttempts();
-    void encryptedSegmentsIncludeExplicitIndices();
-    void ordinarySegmentsRemainUnchanged();
+    void segmentsArePlainNzb11();
     void validatesEncryptionSettings();
     void encryptionSettingsValidationResetsInvalidState();
 };
@@ -84,27 +83,18 @@ void NzbTest::writerRejectsInjectionAttempts()
     QVERIFY(!xml.contains(QStringLiteral("<meta type=\"peekable\">")));
 }
 
-void NzbTest::encryptedSegmentsIncludeExplicitIndices()
+void NzbTest::segmentsArePlainNzb11()
 {
+    // Segment identity lives only in the article bootstrap; NZB segments are
+    // identical for encrypted and ordinary uploads.
     QString xml;
     QTextStream stream(&xml);
     NzbWriter::writeSegment(stream, QStringLiteral("      "), 4, 1,
-                            QStringLiteral("one@example.invalid"), 1);
+                            QStringLiteral("one@example.invalid"));
     NzbWriter::writeSegment(stream, QStringLiteral("      "), 4, 2,
-                            QStringLiteral("two<&@example.invalid"), 2);
-    QVERIFY(xml.contains(QStringLiteral("<segment bytes=\"4\" number=\"1\">one@example.invalid</segment>")));
-    QVERIFY(xml.contains(QStringLiteral("<segment bytes=\"4\" number=\"2\">two&lt;&amp;@example.invalid</segment>")));
-    QVERIFY(!xml.contains(QStringLiteral("segmentIndex")));
-}
-
-void NzbTest::ordinarySegmentsRemainUnchanged()
-{
-    QString xml;
-    QTextStream stream(&xml);
-    NzbWriter::writeSegment(stream, QStringLiteral("      "), 4, 1,
-                            QStringLiteral("plain@example.invalid"));
-    QCOMPARE(xml, QStringLiteral("      <segment bytes=\"4\" number=\"1\">plain@example.invalid</segment>\n"));
-    QVERIFY(!xml.contains(QStringLiteral("segmentIndex")));
+                            QStringLiteral("two<&@example.invalid"));
+    QCOMPARE(xml, QStringLiteral("      <segment bytes=\"4\" number=\"1\">one@example.invalid</segment>\n"
+                                 "      <segment bytes=\"4\" number=\"2\">two&lt;&amp;@example.invalid</segment>\n"));
 }
 
 void NzbTest::validatesEncryptionSettings()

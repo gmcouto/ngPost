@@ -48,13 +48,13 @@ private slots:
     void fullArticlePreservesDataAndFraming();
     void rejectsDualSaltMismatch();
     void generatedSaltsAreUsable();
-    // C2-03: Line 1 bootstrap prefix must never be split on embedded 0x0A/0x0D
+    // Line 1 bootstrap prefix must never be split on embedded 0x0A/0x0D
     void bootstrapPrefixSurvivesSegmentIndexDelimiterBytes();
-    // C2-04: missing =yencryption header must be rejected in both directions
+    // Missing =yencryption header must be rejected in both directions
     void rejectsMissingEncryptionHeader();
-    // C2-06: destructor wipes must leave key buffers zeroed
+    // Destructor wipes must leave key buffers zeroed
     void keyStructsWipeOnDestruction();
-    // Phase 58 Task 11 (T11): vendored canonical conformance vectors
+    // Vendored canonical conformance vectors
     void vendoredManifestIntegrity();
     void vendoredArgon2idVectors();
     void vendoredNonceTweakVectors();
@@ -223,7 +223,7 @@ void CryptoTest::fullArticlePreservesDataAndFraming()
     const QByteArray line2("DataLine1TestDataMustRemainUntouched1234567890");
     const QByteArray line3("DataLine2TestDataMustRemainUntouched1234567890");
     const QByteArray line4("=yend size=18");
-    // C2-04: combined-mode blocks must carry the =yencryption header.
+    // Combined-mode blocks must carry the =yencryption header.
     const QByteArray lineEnc = QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
             + salt.toHex() + QByteArrayLiteral(" index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b");
     const QByteArray block = line1 + "\r\n" + lineEnc + "\r\n" + line2 + "\n" + line3 + "\r\n" + line4;
@@ -281,7 +281,7 @@ void CryptoTest::generatedSaltsAreUsable()
 
 void CryptoTest::bootstrapPrefixSurvivesSegmentIndexDelimiterBytes()
 {
-    // CR-02 (Phase 58 Task 1): uint32_be(segmentIndex) MUST NOT contain 0x0A/0x0D.
+    // Index framing rule: uint32_be(segmentIndex) MUST NOT contain 0x0A/0x0D.
     // Uploader-side: the SegmentIndexAllocator skips such indices before they are
     // ever assigned (see ArticleTest). Decoder-side: a bootstrap whose 20-byte
     // Line 1 prefix carries an embedded 0x0A/0x0D is PROVIDER_FAILOVER — the line
@@ -326,7 +326,7 @@ void CryptoTest::bootstrapPrefixSurvivesSegmentIndexDelimiterBytes()
 
 void CryptoTest::rejectsMissingEncryptionHeader()
 {
-    // C2-04: a combined-mode block without =yencryption must be rejected by
+    // A combined-mode block without =yencryption must be rejected by
     // encryptControlLines (the wire contract requires the header) and
     // decryptControlLines must not silently accept a restored block that lost
     // the header (Dual-Bootstrap Agreement bypass).
@@ -357,7 +357,7 @@ void CryptoTest::rejectsMissingEncryptionHeader()
 
 void CryptoTest::keyStructsWipeOnDestruction()
 {
-    // C2-06: CryptoKeys and BodyEncryptionResult must wipe their secret buffers
+    // CryptoKeys and BodyEncryptionResult must wipe their secret buffers
     // on destruction. Verified indirectly: derive into a fresh struct, take a
     // copy (heap reallocation copies bytes), let the original go out of scope,
     // and confirm the copies still hold working keys (wire contract preserved)
@@ -395,7 +395,7 @@ void CryptoTest::keyStructsWipeOnDestruction()
 }
 
 // ---------------------------------------------------------------------------
-// Phase 58 Task 11 (T11): vendored canonical conformance vectors.
+// Vendored canonical conformance vectors.
 // All vectors are vendored byte-identical from the standards repository into
 // tests/test-vectors/ (self-containment constraint); the manifest checksums
 // gate drift. The JSON helpers used by the single-line control vector rows

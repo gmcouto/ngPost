@@ -290,7 +290,7 @@ void NntpConnection::onSslErrors(const QList<QSslError> &errors)
 
 void NntpConnection::onErrors(QAbstractSocket::SocketError)
 {
-    // C1-03: guard against socket teardown / null deref
+    // Guard against socket teardown / null deref
     if (!_socket)
         return;
     _error(QString("Error Socket: %1").arg(_socket->errorString()));
@@ -496,7 +496,7 @@ void NntpConnection::onReadyRead()
 //#if defined(__DEBUG__) && defined(LOG_CONNECTION_ERRORS_BEFORE_EMIT_SIGNALS)
 //                _error(err);
 //#endif
-                // C1-02: never log credentials — drop user/pass from the error message
+                // Never log credentials — drop user/pass from the error message
                 emit errorConnecting(tr("[Connection #%1] Error authentication to server %2:%3 (authentication rejected)").arg(
                                          _id).arg(_srvParams.host).arg(_srvParams.port));
                 _closeConnection();

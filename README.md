@@ -145,12 +145,12 @@ so in the second example above, the nzb would be: /tmp/file1.nzb
 
 ### yEnc Header and Body Encryption
 
-ngPost supports opt-in yEnc body and control-line encryption according to the v1.1
-Self-Describing Article Bootstrap Standard. Article bodies are encrypted with
+ngPost supports opt-in yEnc body and control-line encryption according to the experimental
+v1.2 yEnc Body and Control Lines Encryption Standards. Article bodies are encrypted with
 XChaCha20-Poly1305, and control lines (`=ybegin`, `=ypart`, `=yend`, `=yencryption`)
 are encrypted using Radix 253 NIST SP 800-38G FF1.
 
-Under the v1.1 bootstrap standard, each posted Usenet article is self-describing
+Under the v1.2 standard, each posted Usenet article is self-describing
 and embeds its salt and monotonic segment index directly into the wire bytes:
 - A 20-byte bootstrap prefix (`[16-byte raw salt][4-byte uint32_be(segmentIndex)]`)
   is prepended to physical Line 1 (`=ybegin`) before FF1 ciphertext.
