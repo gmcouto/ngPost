@@ -88,6 +88,7 @@ PostingJob::PostingJob(NgPost *ngPost,
     _obfuscateArticles(obfuscateArticles), _obfuscateFileName(obfuscateFileName),
     _encryptionEnabled(!encryptionPassword.isEmpty()), _encryptionPassword(encryptionPassword),
     _encryptionSalt(), _encryptionKeys(),
+    _encryptionKeysMutex(), _encryptionKeysJoinMutex(), _encryptionKeysState(0), _encryptionKeysWorker(),
     _segmentIndices(), _encryptionError(),
     _delFilesAfterPost(delFilesAfterPost ? 0x1 : 0x0),
     _originalFiles(!postWidget || delFilesAfterPost  || obfuscateFileName ? files : QFileInfoList()),
@@ -128,13 +129,21 @@ PostingJob::PostingJob(NgPost *ngPost,
         connect(&_immediateSpeedTimer, &QTimer::timeout, this, &PostingJob::onImmediateSpeedComputation, Qt::QueuedConnection);
 #endif
 
+    // F6.3: the 64 MiB Argon2id KDF used to run synchronously here, stalling
+    // the HMI ~0.5-1 s per encrypted job. The salt is generated eagerly (cheap)
+    // and the derivation is kicked off on a worker thread so it overlaps
+    // packing/compression; _ensureEncryptionKeys() joins it before first use.
     if(_encryptionEnabled)
     {
         _encryptionSalt = CryptoEngine::generateControlSalt();
-        if(_encryptionSalt.size() != 16
-                || !CryptoEngine::deriveKeys(encryptionPassword, _encryptionSalt, _encryptionKeys,
-                                             &_encryptionError))
-            _encryptionError = QStringLiteral("Unable to initialize upload encryption");
+        try {
+            _encryptionKeysWorker = std::thread(&PostingJob::_deriveEncryptionKeysWorker, this);
+        }
+        catch(const std::system_error &) {
+            // thread creation failed: degrade to synchronous derivation so the
+            // behavior (keys ready or clean failure) is preserved.
+            _deriveEncryptionKeysWorker();
+        }
     }
 
     if (ngPost->debugMode())
@@ -169,6 +178,13 @@ PostingJob::~PostingJob()
     qDeleteAll(_nntpConnections);
     qDeleteAll(_closedConnections);
     qDeleteAll(_posters);
+
+    // F6.3: join the KDF worker before wiping the key material it writes
+    // (serialized like _ensureEncryptionKeys; concurrent join() is UB).
+    _encryptionKeysJoinMutex.lock();
+    if(_encryptionKeysWorker.joinable())
+        _encryptionKeysWorker.join();
+    _encryptionKeysJoinMutex.unlock();
 
     if (_nzb)
         delete _nzb;
@@ -248,10 +264,54 @@ void PostingJob::onImmediateSpeedComputation()
 }
 #endif
 
+bool PostingJob::_ensureEncryptionKeys()
+{
+    if(!_encryptionEnabled)
+        return true;
+
+    // Join the KDF worker spawned in the constructor. Concurrent join() on one
+    // std::thread is undefined behavior, so the join is serialized by a
+    // dedicated mutex (never held by the worker itself => no deadlock).
+    _encryptionKeysJoinMutex.lock();
+    if(_encryptionKeysWorker.joinable())
+        _encryptionKeysWorker.join();
+    _encryptionKeysJoinMutex.unlock();
+
+    _encryptionKeysMutex.lock();
+    const bool ready = _encryptionKeysState == 1;
+    _encryptionKeysMutex.unlock();
+    return ready;
+}
+
+void PostingJob::_deriveEncryptionKeysWorker()
+{
+    _encryptionKeysMutex.lock();
+    if(_encryptionKeysState != 0) // already derived (or failed) by an earlier call
+    {
+        _encryptionKeysMutex.unlock();
+        return;
+    }
+    // Derive outside the critical section: this is the expensive 64 MiB
+    // Argon2id call; only the state update below needs the mutex.
+    _encryptionKeysMutex.unlock();
+    QString error;
+    const bool ok = _encryptionSalt.size() == 16
+            && CryptoEngine::deriveKeys(_encryptionPassword, _encryptionSalt, _encryptionKeys, &error);
+    _encryptionKeysMutex.lock();
+    if(ok)
+        _encryptionKeysState = 1;
+    else
+    {
+        _encryptionError = QStringLiteral("Unable to initialize upload encryption");
+        _encryptionKeysState = 2;
+    }
+    _encryptionKeysMutex.unlock();
+}
+
 void PostingJob::onStartPosting(bool isActiveJob)
 {
     _isActiveJob = isActiveJob;
-    if(_encryptionEnabled && !_encryptionError.isEmpty())
+    if(_encryptionEnabled && !_ensureEncryptionKeys())
     {
         _error(_encryptionError);
         emit postingFinished();
@@ -720,6 +780,7 @@ NntpArticle *PostingJob::_readNextArticleIntoBufferPtr(const QString &threadName
             quint32 segmentIndex = 0;
             if(_encryptionEnabled && !_segmentIndices.next(segmentIndex))
             {
+                // F6.4: worker-thread write, protected by the held _secureDiskAccess
                 _encryptionError = QStringLiteral("Encrypted release exceeds segmentIndex range");
                 _error(_encryptionError);
                 _stopPosting = 0x1;

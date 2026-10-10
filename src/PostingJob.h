@@ -31,6 +31,7 @@
 #include <QTime>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <thread>
 class QProcess;
 class NgPost;
 class NntpConnection;
@@ -173,6 +174,14 @@ private:
     QString _encryptionPassword;
     QByteArray _encryptionSalt;
     CryptoKeys _encryptionKeys;
+    //! F6.3: the 64 MiB Argon2id KDF runs on a worker thread spawned by the
+    //! constructor (never on the GUI thread); _ensureEncryptionKeys() waits
+    //! for it. _encryptionKeysState is 0 while deriving, 1 when ready, 2 on
+    //! failure (all guarded by _encryptionKeysMutex).
+    QMutex _encryptionKeysMutex; //!< guards _encryptionKeysState/_encryptionError (F6.3)
+    QMutex _encryptionKeysJoinMutex; //!< serializes joining _encryptionKeysWorker (F6.3)
+    int _encryptionKeysState;
+    std::thread _encryptionKeysWorker;
     SegmentIndexAllocator _segmentIndices;
     QString _encryptionError;
 
@@ -327,6 +336,13 @@ private slots:
 private:
     void _log(const QString &aMsg, bool newline = true) const; //!< log function for QString
     void _error(const QString &error) const;
+
+    // F6.3: the 64 MiB Argon2id KDF must not run in the PostingJob constructor
+    // (GUI-thread stall). The constructor spawns a worker that derives the keys
+    // while packing/compression proceeds; _ensureEncryptionKeys() joins it and
+    // returns false on derivation failure (keys ready before first encoding).
+    bool _ensureEncryptionKeys();
+    void _deriveEncryptionKeysWorker();
 
     int  _createNntpConnections();
     void _preparePostersArticles();

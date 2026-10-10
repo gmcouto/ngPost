@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include <QFile>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -8,6 +9,30 @@
 #include "crypto/CryptoEngine.h"
 #include "crypto/FF1Cipher.h"
 #include "../src/PostingJob.h"
+
+namespace
+{
+QByteArray readVectorFile(const char *name)
+{
+    QFile file(QStringLiteral("%1/test-vectors/%2").arg(QCoreApplication::applicationDirPath()).arg(name));
+    // qmake may run tests from the build dir; also try the source-relative path
+    if(!file.exists())
+        file.setFileName(QStringLiteral("test-vectors/%1").arg(name));
+    if(!file.open(QIODevice::ReadOnly))
+        qFatal("cannot open vector file: %s", qPrintable(file.fileName()));
+    return file.readAll();
+}
+
+QJsonObject loadVectorJson(const char *name)
+{
+    const QByteArray raw = readVectorFile(name);
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw, &parseError);
+    if(parseError.error != QJsonParseError::NoError)
+        qFatal("cannot parse vector file %s: %s", name, qPrintable(parseError.errorString()));
+    return doc.object();
+}
+} // namespace
 
 class CryptoTest : public QObject
 {
@@ -123,22 +148,35 @@ void CryptoTest::controlLineVectors_data()
     QTest::addColumn<quint32>("lineIndex");
     QTest::addColumn<QByteArray>("expectedWire");
 
-    QTest::newRow("ybegin")
-            << QByteArray("=ybegin line=128 size=18 name=file.bin")
-            << quint32(1)
-            << QByteArray::fromHex("4b376d5839704c32715238764e34775a000000013ff69054da2b2309591e740e5b9fd79015f610d42f01bd203e5f55dadc39fc760407e845201f");
-    QTest::newRow("ypart")
-            << QByteArray("=ypart begin=1 end=700000")
-            << quint32(2)
-            << QByteArray::fromHex("2135072cf2b566804a99bd31fe1d42b2603a7518ae20a58498");
-    QTest::newRow("yencryption")
-            << QByteArray("=yencryption cipher=XChaCha20-Poly1305 salt=1a2b3c4d5e6f7890abcdef1234567890 index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b")
-            << quint32(3)
-            << QByteArray::fromHex("83d80bd33fadb8b408bb829e7609ca80e4519b05e21f1f1b77ee685d045869744273e698ccb5ac933183439b0e567524dedabd7e5ad04cf4dda5281932c622cfa2b9a2d45f3cb1ae166d211c653f7857610938a794cac9f56af7cd063581c9814746b807af1f64054caf73784941031c5fb1e4fed2a8460e801809a6b8f0d18d");
-    QTest::newRow("yend")
-            << QByteArray("=yend size=700000 part=1 pcrc32=12345678")
-            << quint32(54)
-            << QByteArray::fromHex("c25ab5a44cfa8440112fdbd42192355eea94ec91036f6c9a401b5a937497017a507aec5be707635e");
+    // control-vec-01..06: single-line FF1 vectors read straight from the
+    // vendored fixture (self-containment + drift guard: the suite can never
+    // diverge silently from tests/test-vectors/).
+    const QJsonObject data = loadVectorJson("control_line_encryption.json");
+    QHash<QString, QJsonObject> byId;
+    for(const QJsonValue &value : data.value(QStringLiteral("vectors")).toArray())
+    {
+        const QJsonObject vector = value.toObject();
+        if(!vector.contains(QStringLiteral("expected_wire_hex")))
+            continue; // full-article vectors (07/08) are covered by fullArticlePreservesDataAndFraming
+        byId.insert(vector.value(QStringLiteral("id")).toString(), vector);
+    }
+
+    struct LineCase { const char *fixtureId; const char *row; };
+    const LineCase lineCases[] = {
+        {"control-vec-01-line-1-ybegin-single",   "ybegin"},
+        {"control-vec-03-line-2-ypart",           "ypart"},
+        {"control-vec-04-line-3-yencryption",     "yencryption"},
+        {"control-vec-06-line-54-yend-multipart", "yend"},
+    };
+    for(const LineCase &lineCase : lineCases)
+    {
+        const QJsonObject vector = byId.value(QLatin1String(lineCase.fixtureId));
+        QVERIFY2(!vector.isEmpty(), lineCase.fixtureId);
+        QTest::newRow(lineCase.row)
+                << QByteArray(vector.value(QStringLiteral("plaintext_line")).toString().toLatin1())
+                << static_cast<quint32>(vector.value(QStringLiteral("line_index")).toInt())
+                << QByteArray::fromHex(vector.value(QStringLiteral("expected_wire_hex")).toString().toLatin1());
+    }
 }
 
 void CryptoTest::controlLineVectors()
@@ -147,11 +185,17 @@ void CryptoTest::controlLineVectors()
     QFETCH(quint32, lineIndex);
     QFETCH(QByteArray, expectedWire);
 
-    const QByteArray masterKey = QByteArray::fromHex(
-                "de3bfc39034371d589b34d485c572c12ce2ac6d4464adaea47fc1fb1e0fbfbd3");
-    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
-    QByteArray wire;
+    // Single-line control vectors all use control-vec-04's session identity:
+    // password test123, salt K7mX9pL2qR8vN4wZ, segment index 1 (fixture-pinned
+    // by vendoredManifestIntegrity); the master key derives from them.
+    const QByteArray salt = QByteArray::fromHex(
+                loadVectorJson("control_line_encryption.json")
+                    .value(QStringLiteral("vectors")).toArray().first().toObject()
+                    .value(QStringLiteral("salt_hex")).toString().toLatin1());
+    QByteArray masterKey;
     QString error;
+    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error), qPrintable(error));
+    QByteArray wire;
     QVERIFY2(FF1Cipher::encryptLine(plaintext, masterKey, 1, lineIndex, salt, wire, &error), qPrintable(error));
     QCOMPARE(wire, expectedWire);
 
@@ -354,32 +398,9 @@ void CryptoTest::keyStructsWipeOnDestruction()
 // Phase 58 Task 11 (T11): vendored canonical conformance vectors.
 // All vectors are vendored byte-identical from the standards repository into
 // tests/test-vectors/ (self-containment constraint); the manifest checksums
-// gate drift.
+// gate drift. The JSON helpers used by the single-line control vector rows
+// live at the top of this file.
 // ---------------------------------------------------------------------------
-
-namespace
-{
-QByteArray readVectorFile(const char *name)
-{
-    QFile file(QStringLiteral("%1/test-vectors/%2").arg(QCoreApplication::applicationDirPath()).arg(name));
-    // qmake may run tests from the build dir; also try the source-relative path
-    if(!file.exists())
-        file.setFileName(QStringLiteral("test-vectors/%1").arg(name));
-    if(!file.open(QIODevice::ReadOnly))
-        qFatal("cannot open vector file: %s", qPrintable(file.fileName()));
-    return file.readAll();
-}
-
-QJsonObject loadVectorJson(const char *name)
-{
-    const QByteArray raw = readVectorFile(name);
-    QJsonParseError parseError;
-    const QJsonDocument doc = QJsonDocument::fromJson(raw, &parseError);
-    if(parseError.error != QJsonParseError::NoError)
-        qFatal("cannot parse vector file %s: %s", name, qPrintable(parseError.errorString()));
-    return doc.object();
-}
-} // namespace
 
 void CryptoTest::vendoredManifestIntegrity()
 {

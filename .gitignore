@@ -12,4 +12,6 @@ tests/CryptoTest
 tests/CryptoTest.moc
 tests/NzbTest
 tests/NzbTest.moc
+tests/ConformanceVectors
+tests/ConformanceVectors.moc
 tests/target_wrapper.sh

@@ -47,6 +47,16 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
     _job->_secureDiskAccess.unlock();
     if (article)
     {
+        // F6.3: keys are derived lazily (not in the PostingJob constructor);
+        // this is the first consumer. On failure, stop the job cleanly.
+        if (!_job->_ensureEncryptionKeys())
+        {
+            _job->_error(_job->_encryptionError);
+            _job->_stopPosting = 0x1;
+            _job->_noMoreFiles = 0x1;
+            emit _job->stopPosting();
+            return nullptr;
+        }
         QString error;
         const YencEncryptionContext encryption(_job->_encryptionKeys.bodyKey,
                                                 _job->_encryptionKeys.masterKey,
@@ -57,9 +67,12 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
         {
             _job->_secureDiskAccess.lock();
             article->nntpFile()->removeArticle(article);
+            // F6.4: _encryptionError is a QString shared with other builder
+            // threads; the write must stay inside the same critical section as
+            // removeArticle to avoid a refcount race on the failure path.
+            _job->_encryptionError = QStringLiteral("Unable to encode article: %1").arg(error);
             _job->_secureDiskAccess.unlock();
             delete article;
-            _job->_encryptionError = QStringLiteral("Unable to encode article: %1").arg(error);
             _job->_error(_job->_encryptionError);
             _job->_stopPosting = 0x1;
             _job->_noMoreFiles = 0x1;
