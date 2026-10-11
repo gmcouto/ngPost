@@ -122,17 +122,7 @@ bool CryptoEngine::deriveKey(const QString &password, const QByteArray &salt, QB
 bool CryptoEngine::deriveKeys(const QString &password, const QByteArray &salt, CryptoKeys &keys, QString *error)
 {
     keys = CryptoKeys();
-    if(!deriveKey(password, salt, keys.masterKey, error))
-        return false;
-    keys.bodyKey = keys.masterKey;
-    if(!deriveControlKey(keys.masterKey, keys.controlKey, error))
-    {
-        sodium_memzero(keys.masterKey.data(), static_cast<size_t>(keys.masterKey.size()));
-        sodium_memzero(keys.bodyKey.data(), static_cast<size_t>(keys.bodyKey.size()));
-        keys = CryptoKeys();
-        return false;
-    }
-    return true;
+    return deriveKey(password, salt, keys.masterKey, error);
 }
 
 bool CryptoEngine::deriveBodyNonce(const QByteArray &key, quint32 segmentIndex, QByteArray &nonce, QString *error)
@@ -171,8 +161,9 @@ bool CryptoEngine::encryptBody(const QByteArray &plaintext, const QByteArray &ke
                                BodyEncryptionResult &result, QString *error)
 {
     result = BodyEncryptionResult();
+    QByteArray nonce;
     if(!initialize(error) || !validateKey(key, "Key", error)
-            || !deriveBodyNonce(key, segmentIndex, result.nonce, error))
+            || !deriveBodyNonce(key, segmentIndex, nonce, error))
         return false;
 
     QByteArray sealed(plaintext.size() + TagSize, Qt::Uninitialized);
@@ -181,11 +172,12 @@ bool CryptoEngine::encryptBody(const QByteArray &plaintext, const QByteArray &ke
                 reinterpret_cast<unsigned char *>(sealed.data()), &sealedLength,
                 reinterpret_cast<const unsigned char *>(plaintext.constData()),
                 static_cast<unsigned long long>(plaintext.size()), nullptr, 0, nullptr,
-                reinterpret_cast<const unsigned char *>(result.nonce.constData()),
+                reinterpret_cast<const unsigned char *>(nonce.constData()),
                 reinterpret_cast<const unsigned char *>(key.constData()));
     if(status != 0 || sealedLength != static_cast<unsigned long long>(sealed.size()))
     {
         sodium_memzero(sealed.data(), static_cast<size_t>(sealed.size()));
+        sodium_memzero(nonce.data(), static_cast<size_t>(nonce.size()));
         result = BodyEncryptionResult();
         setError(error, QStringLiteral("Body encryption failed"));
         return false;
@@ -193,40 +185,5 @@ bool CryptoEngine::encryptBody(const QByteArray &plaintext, const QByteArray &ke
     result.ciphertext = sealed.left(plaintext.size());
     result.tag = sealed.right(TagSize);
     sodium_memzero(sealed.data(), static_cast<size_t>(sealed.size()));
-    return true;
-}
-
-bool CryptoEngine::decryptBody(const QByteArray &ciphertext, const QByteArray &tag, const QByteArray &key,
-                               quint32 segmentIndex, QByteArray &plaintext, QString *error)
-{
-    plaintext.clear();
-    QByteArray nonce;
-    if(!initialize(error) || !validateKey(key, "Key", error)
-            || tag.size() != TagSize || !deriveBodyNonce(key, segmentIndex, nonce, error))
-    {
-        if(tag.size() != TagSize)
-            setError(error, QStringLiteral("Authentication tag must be exactly 16 bytes"));
-        return false;
-    }
-
-    QByteArray sealed = ciphertext + tag;
-    QByteArray candidate(ciphertext.size(), Qt::Uninitialized);
-    unsigned long long plaintextLength = 0;
-    const int status = crypto_aead_xchacha20poly1305_ietf_decrypt(
-                reinterpret_cast<unsigned char *>(candidate.data()), &plaintextLength, nullptr,
-                reinterpret_cast<const unsigned char *>(sealed.constData()),
-                static_cast<unsigned long long>(sealed.size()), nullptr, 0,
-                reinterpret_cast<const unsigned char *>(nonce.constData()),
-                reinterpret_cast<const unsigned char *>(key.constData()));
-    sodium_memzero(sealed.data(), static_cast<size_t>(sealed.size()));
-    sodium_memzero(nonce.data(), static_cast<size_t>(nonce.size()));
-    if(status != 0)
-    {
-        sodium_memzero(candidate.data(), static_cast<size_t>(candidate.size()));
-        setError(error, QStringLiteral("Body authentication failed"));
-        return false;
-    }
-    candidate.resize(static_cast<int>(plaintextLength));
-    plaintext = candidate;
     return true;
 }

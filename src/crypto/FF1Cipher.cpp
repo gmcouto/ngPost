@@ -244,6 +244,7 @@ bool ff1Transform(const QByteArray &key, const QByteArray &tweak, const QByteArr
     std::vector<uchar> numerals;
     if(!bytesToNumerals(input, numerals, error))
         return false;
+    QByteArray ciphertext;
 
     EvpCipherContext cipher(EVP_CIPHER_CTX_new());
     BnContext bnContext(BN_CTX_new());
@@ -419,22 +420,8 @@ std::vector<Line> splitLines(const QByteArray &block)
 {
     std::vector<Line> lines;
     int start = 0;
-    // The Line 1 bootstrap prefix ([16B salt][4B uint32_be(segmentIndex)])
-    // on encrypted wire blocks is atomic. uint32_be(segmentIndex) may contain
-    // 0x0A (LF) or 0x0D (CR); a scan that starts at index 0 would split Line 1
-    // inside the prefix. When the block does not begin with "=y" (encrypted
-    // wire form), skip the scan past the 20-byte bootstrap prefix. Decrypted /
-    // plaintext blocks start with "=y" and need no offset.
-    const bool encryptedWire = !block.startsWith(QByteArrayLiteral("=y"));
-    const int bootstrapSkip = SaltSize + 4; // 20 bytes
     for(int index = 0; index < block.size(); ++index)
     {
-        if(encryptedWire && lines.empty() && index < bootstrapSkip)
-        {
-            // Jump to the first byte after the bootstrap prefix.
-            index = bootstrapSkip - 1;
-            continue;
-        }
         if(block[index] != '\n')
             continue;
         const int contentEnd = index > start && block[index - 1] == '\r' ? index - 1 : index;
@@ -568,95 +555,6 @@ bool FF1Cipher::encryptLine(const QByteArray &plaintext, const QByteArray &maste
     return true;
 }
 
-bool FF1Cipher::decryptLine(const QByteArray &wire, const QByteArray &masterKey, quint32 segmentIndex,
-                            quint32 lineIndex, QByteArray &plaintext, QByteArray *salt, QString *error)
-{
-    return decryptLine(wire, masterKey, segmentIndex, lineIndex, plaintext, salt, nullptr, error);
-}
-
-bool FF1Cipher::decryptLine(const QByteArray &wire, const QByteArray &masterKey, quint32 segmentIndex,
-                            quint32 lineIndex, QByteArray &plaintext, QByteArray *salt,
-                            quint32 *extractedSegmentIndex, QString *error)
-{
-    plaintext.clear();
-    if(masterKey.size() != KeySize || lineIndex == 0)
-    {
-        setError(error, QStringLiteral("Invalid key or control-line index"));
-        return false;
-    }
-    if(lineIndex != 1 && segmentIndex == 0)
-    {
-        setError(error, QStringLiteral("segmentIndex must be non-zero"));
-        return false;
-    }
-
-    quint32 effectiveSegmentIndex = segmentIndex;
-    QByteArray ciphertext = wire;
-    if(lineIndex == 1)
-    {
-        if(wire.size() < SaltSize + 4 + 2)
-        {
-            setError(error, QStringLiteral("Encrypted Line 1 is too short"));
-            return false;
-        }
-        const QByteArray extractedSalt = wire.left(SaltSize);
-        for(char value : extractedSalt)
-        {
-            if(!isAlphabetByte(static_cast<uchar>(value)))
-            {
-                setError(error, QStringLiteral("Line 1 salt contains a byte outside the Radix 253 alphabet"));
-                return false;
-            }
-        }
-        const quint32 extractedIndex = (static_cast<uchar>(wire[16]) << 24)
-                                     | (static_cast<uchar>(wire[17]) << 16)
-                                     | (static_cast<uchar>(wire[18]) << 8)
-                                     | static_cast<uchar>(wire[19]);
-        if(extractedIndex == 0)
-        {
-            setError(error, QStringLiteral("Extracted segmentIndex must be non-zero"));
-            return false;
-        }
-        for(int shift = 24; shift >= 0; shift -= 8)
-        {
-            const uchar b = static_cast<uchar>((extractedIndex >> shift) & 0xFF);
-            if(b == 0x0A || b == 0x0D)
-            {
-                setError(error, QStringLiteral("Line 1 segmentIndex contains forbidden delimiter byte"));
-                return false;
-            }
-        }
-        if(segmentIndex != 0 && extractedIndex != segmentIndex)
-        {
-            setError(error, QStringLiteral("segmentIndex mismatch on Line 1"));
-            return false;
-        }
-        effectiveSegmentIndex = extractedIndex;
-        if(salt)
-            *salt = extractedSalt;
-        if(extractedSegmentIndex)
-            *extractedSegmentIndex = extractedIndex;
-        ciphertext.remove(0, SaltSize + 4);
-    }
-
-    QByteArray controlKey;
-    QByteArray tweak;
-    if(!CryptoEngine::deriveControlKey(masterKey, controlKey, error)
-            || !CryptoEngine::deriveControlTweak(masterKey, effectiveSegmentIndex, lineIndex, tweak, error)
-            || !ff1Transform(controlKey, tweak, ciphertext, true, plaintext, error))
-    {
-        if(!controlKey.isEmpty())
-            sodium_memzero(controlKey.data(), static_cast<size_t>(controlKey.size()));
-        if(!tweak.isEmpty())
-            sodium_memzero(tweak.data(), static_cast<size_t>(tweak.size()));
-        plaintext.clear();
-        return false;
-    }
-    sodium_memzero(controlKey.data(), static_cast<size_t>(controlKey.size()));
-    sodium_memzero(tweak.data(), static_cast<size_t>(tweak.size()));
-    return true;
-}
-
 bool FF1Cipher::encryptControlLines(const QByteArray &block, const QByteArray &masterKey, quint32 segmentIndex,
                                     const QByteArray &salt, QByteArray &wire, QString *error)
 {
@@ -715,130 +613,5 @@ bool FF1Cipher::encryptControlLines(const QByteArray &block, const QByteArray &m
         return false;
     }
     wire = joinLines(lines);
-    return true;
-}
-
-bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &masterKey, quint32 segmentIndex,
-                                    QByteArray &block, QByteArray *salt, QString *error)
-{
-    return decryptControlLines(wire, masterKey, segmentIndex, block, salt, nullptr, error);
-}
-
-bool FF1Cipher::decryptControlLines(const QByteArray &wire, const QByteArray &masterKey, quint32 segmentIndex,
-                                    QByteArray &block, QByteArray *salt, quint32 *extractedSegmentIndex,
-                                    QString *error)
-{
-    block.clear();
-    std::vector<Line> lines = splitLines(wire);
-    if(lines.size() < 2)
-    {
-        setError(error, QStringLiteral("Encrypted yEnc block is incomplete"));
-        return false;
-    }
-
-    QByteArray extractedSalt;
-    quint32 extractedIndex = 0;
-    QByteArray firstLine;
-    if(!decryptLine(lines.front().content, masterKey, segmentIndex, 1, firstLine, &extractedSalt, &extractedIndex, error)
-            || !matchesControlLine(firstLine, QByteArrayLiteral("=ybegin")))
-    {
-        setError(error, QStringLiteral("Unable to restore =ybegin line"));
-        return false;
-    }
-    lines.front().content = firstLine;
-
-    const quint32 effectiveSegmentIndex = extractedIndex;
-
-    // Three-branch header-loop probe semantics.
-    //  - FF1 decryption error on a line in the header region → fail closed
-    //    (PROVIDER_FAILOVER, never data-line passthrough);
-    //  - success yielding non-`=y` content → first data line, loop terminates;
-    //  - success yielding `=y` content → restored control line, continue.
-    for(size_t offset = 1; offset + 1 < lines.size(); ++offset)
-    {
-        QByteArray candidate;
-        QString probeError;
-        if(!decryptLine(lines[offset].content, masterKey, effectiveSegmentIndex, static_cast<quint32>(offset + 1),
-                        candidate, nullptr, nullptr, &probeError))
-        {
-            // fail closed: WARN without echoing secrets, no data-line passthrough
-            qWarning("FF1 header-region decryption failed (provider corruption); refusing to pass through as data line");
-            setError(error, QStringLiteral("FF1 header-region decryption failed (provider corruption)"));
-            return false;
-        }
-        if(!isControlLine(candidate))
-            break; // first data line — header region ends
-        lines[offset].content = candidate;
-    }
-
-    QByteArray finalLine;
-    const quint32 finalIndex = static_cast<quint32>(lines.size());
-    if(!decryptLine(lines.back().content, masterKey, effectiveSegmentIndex, finalIndex, finalLine, nullptr, nullptr, error)
-            || !matchesControlLine(finalLine, QByteArrayLiteral("=yend")))
-    {
-        setError(error, QStringLiteral("Unable to restore =yend line"));
-        return false;
-    }
-    lines.back().content = finalLine;
-
-    const bool isMultipart = firstLine.contains(" part=") || (lines.size() > 1 && matchesControlLine(lines[1].content, QByteArrayLiteral("=ypart")));
-    size_t expectedYencIndex = 0;
-    if(isMultipart)
-    {
-        if(lines.size() < 4)
-        {
-            setError(error, QStringLiteral("Multipart yEnc block is too short"));
-            return false;
-        }
-        if(!matchesControlLine(lines[1].content, QByteArrayLiteral("=ypart")))
-        {
-            setError(error, QStringLiteral("Multipart yEnc block requires =ypart at physical line 2"));
-            return false;
-        }
-        if(!matchesControlLine(lines[2].content, QByteArrayLiteral("=yencryption")))
-        {
-            setError(error, QStringLiteral("Multipart yEnc block requires =yencryption at physical line 3"));
-            return false;
-        }
-        expectedYencIndex = 2;
-    }
-    else
-    {
-        if(lines.size() < 3)
-        {
-            setError(error, QStringLiteral("Single-part yEnc block is too short"));
-            return false;
-        }
-        if(!matchesControlLine(lines[1].content, QByteArrayLiteral("=yencryption")))
-        {
-            setError(error, QStringLiteral("Single-part yEnc block requires =yencryption at physical line 2"));
-            return false;
-        }
-        expectedYencIndex = 1;
-    }
-
-    // Ensure no other =yencryption line exists in the entire block
-    for(size_t i = 0; i < lines.size(); ++i)
-    {
-        if(i != expectedYencIndex && matchesControlLine(lines[i].content, QByteArrayLiteral("=yencryption")))
-        {
-            setError(error, QStringLiteral("yEnc block contains duplicate or misplaced =yencryption lines"));
-            return false;
-        }
-    }
-
-    QByteArray headerSalt;
-    quint32 headerIndex = 0;
-    if(!parseYencryptionLine(lines[expectedYencIndex].content, headerSalt, headerIndex) || headerSalt != extractedSalt || headerIndex != extractedIndex)
-    {
-        setError(error, QStringLiteral("Line 1 salt and =yencryption salt must match"));
-        return false;
-    }
-
-    if(salt)
-        *salt = extractedSalt;
-    if(extractedSegmentIndex)
-        *extractedSegmentIndex = extractedIndex;
-    block = joinLines(lines);
     return true;
 }

@@ -10,8 +10,6 @@
 struct CryptoKeys
 {
     QByteArray masterKey;
-    QByteArray bodyKey;
-    QByteArray controlKey;
 
     CryptoKeys() = default;
     ~CryptoKeys()
@@ -27,8 +25,6 @@ struct CryptoKeys
         {
             clear();
             masterKey = other.masterKey;
-            bodyKey = other.bodyKey;
-            controlKey = other.controlKey;
         }
         return *this;
     }
@@ -39,8 +35,6 @@ struct CryptoKeys
         {
             clear();
             masterKey = std::move(other.masterKey);
-            bodyKey = std::move(other.bodyKey);
-            controlKey = std::move(other.controlKey);
         }
         return *this;
     }
@@ -53,16 +47,6 @@ struct CryptoKeys
             sodium_memzero(masterKey.data(), static_cast<size_t>(masterKey.size()));
             masterKey.clear();
         }
-        if(!bodyKey.isEmpty())
-        {
-            sodium_memzero(bodyKey.data(), static_cast<size_t>(bodyKey.size()));
-            bodyKey.clear();
-        }
-        if(!controlKey.isEmpty())
-        {
-            sodium_memzero(controlKey.data(), static_cast<size_t>(controlKey.size()));
-            controlKey.clear();
-        }
     }
 };
 
@@ -70,7 +54,6 @@ struct BodyEncryptionResult
 {
     QByteArray ciphertext;
     QByteArray tag;
-    QByteArray nonce;
 
     BodyEncryptionResult() = default;
     ~BodyEncryptionResult()
@@ -87,7 +70,6 @@ struct BodyEncryptionResult
             clear();
             ciphertext = other.ciphertext;
             tag = other.tag;
-            nonce = other.nonce;
         }
         return *this;
     }
@@ -99,16 +81,14 @@ struct BodyEncryptionResult
             clear();
             ciphertext = std::move(other.ciphertext);
             tag = std::move(other.tag);
-            nonce = std::move(other.nonce);
         }
         return *this;
     }
 
-    // Wipe the derived nonce on destruction.
     void clear()
     {
-        if(!nonce.isEmpty())
-            sodium_memzero(nonce.data(), static_cast<size_t>(nonce.size()));
+        ciphertext.clear();
+        tag.clear();
     }
 };
 
@@ -125,8 +105,6 @@ public:
                                    QByteArray &tweak, QString *error = nullptr);
     static bool encryptBody(const QByteArray &plaintext, const QByteArray &key, quint32 segmentIndex,
                             BodyEncryptionResult &result, QString *error = nullptr);
-    static bool decryptBody(const QByteArray &ciphertext, const QByteArray &tag, const QByteArray &key,
-                            quint32 segmentIndex, QByteArray &plaintext, QString *error = nullptr);
 
 private:
     static bool initialize(QString *error);
