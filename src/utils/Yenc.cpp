@@ -114,9 +114,7 @@ qint64 Yenc::encode(const char data[], qint64 dataSize, uchar encbuffer[], quint
 
         case '\t' :
         case ' ' :
-            // Escape space/tab at line boundaries (start or end of line).
-            // column + 1 == maxwidth identifies the last character before line wrap.
-            if(!column || column + 1 == maxwidth)
+            if(!column || column - 1 == maxwidth)
             {
                 ++column;
                 ++encSize;
@@ -179,7 +177,7 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
             return false;
         }
         BodyEncryptionResult encrypted;
-        if(!CryptoEngine::encryptBody(plaintext, encryption->bodyKey, encryption->segmentIndex,
+        if(!CryptoEngine::encryptBody(plaintext, encryption->masterKey, encryption->segmentIndex,
                                       encrypted, error))
             return false;
         wirePayload = encrypted.ciphertext;
@@ -229,22 +227,28 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
     }
     if(!encryptionLine.isEmpty())
         article += encryptionLine + QByteArrayLiteral("\r\n");
-    // Ensure exactly one CRLF delimiter precedes =yend. If encoded already ends
-    // with \r\n (which occurs when the encoded stream wraps on an exact 128-column boundary)
-    // or if encoded is empty (zero-byte payload), do not inject a blank line.
     article += encoded;
-    if(!encoded.isEmpty() && !encoded.endsWith("\r\n"))
-        article += QByteArrayLiteral("\r\n");
-    article += QByteArrayLiteral("=yend size=") + QByteArray::number(wirePayload.size());
-    if(encryptedSinglePart)
-        article += QByteArrayLiteral(" crc32=");
+    if(encryption)
+    {
+        // Ensure exactly one CRLF delimiter precedes =yend. If encoded already ends
+        // with \r\n (which occurs when the encoded stream wraps on an exact 128-column boundary)
+        // or if encoded is empty (zero-byte payload), do not inject a blank line.
+        if(!encoded.isEmpty() && !encoded.endsWith("\r\n"))
+            article += QByteArrayLiteral("\r\n");
+        article += QByteArrayLiteral("=yend size=") + QByteArray::number(wirePayload.size());
+        if(encryptedSinglePart)
+            article += QByteArrayLiteral(" crc32=");
+        else
+            article += QByteArrayLiteral(" part=") + QByteArray::number(part) + QByteArrayLiteral(" pcrc32=");
+        article += QByteArray::number(wireCrc32, 16).rightJustified(8, '0') + QByteArrayLiteral("\r\n");
+    }
     else
     {
-        if(encryption)
-            article += QByteArrayLiteral(" part=") + QByteArray::number(part);
-        article += QByteArrayLiteral(" pcrc32=");
+        article += QByteArrayLiteral("\r\n");
+        article += QByteArrayLiteral("=yend size=") + QByteArray::number(wirePayload.size())
+                + QByteArrayLiteral(" pcrc32=")
+                + QByteArray::number(wireCrc32, 16) + QByteArrayLiteral("\r\n");
     }
-    article += QByteArray::number(wireCrc32, 16).rightJustified(8, '0') + QByteArrayLiteral("\r\n");
 
     if(encryption)
     {

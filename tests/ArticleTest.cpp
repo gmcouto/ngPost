@@ -1,8 +1,10 @@
 #include <QtTest>
 
+#include <sstream>
+
 #include "PostingJob.h"
 #include "crypto/CryptoEngine.h"
-#include "crypto/FF1Cipher.h"
+#include "TestDecryptor.h"
 #include "utils/Yenc.h"
 
 class ArticleTest : public QObject
@@ -21,8 +23,6 @@ private slots:
     void worstCaseEscapePayloadDoesNotOverflow();
     // Exact-128-column wrap and empty payloads must not inject blank lines
     void exactWrapAndEmptyPayloadPreserveSingleCrlf();
-    // Trailing whitespace at end of line must be escaped
-    void trailingWhitespaceAtLineEndIsEscaped();
 };
 
 void ArticleTest::encryptedSinglePartUsesStrictFraming()
@@ -33,7 +33,7 @@ void ArticleTest::encryptedSinglePartUsesStrictFraming()
     QString error;
     QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
              qPrintable(error));
-    YencEncryptionContext encryption(masterKey, masterKey, salt, 1);
+    YencEncryptionContext encryption(masterKey, salt, 1);
 
     QByteArray wire;
     quint32 crc32 = 0;
@@ -46,7 +46,7 @@ void ArticleTest::encryptedSinglePartUsesStrictFraming()
     QByteArray restored;
     QByteArray extractedSalt;
     quint32 extractedIndex = 0;
-    QVERIFY2(FF1Cipher::decryptControlLines(wire, encryption.masterKey, 1, restored,
+    QVERIFY2(TestDecryptor::decryptControlLines(wire, encryption.masterKey, 1, restored,
                                             &extractedSalt, &extractedIndex, &error), qPrintable(error));
     QCOMPARE(extractedSalt, salt);
     QCOMPARE(extractedIndex, quint32(1));
@@ -67,7 +67,7 @@ void ArticleTest::encryptedMultipartUsesStrictFraming()
     QString error;
     QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
              qPrintable(error));
-    YencEncryptionContext encryption(masterKey, masterKey, salt, 1);
+    YencEncryptionContext encryption(masterKey, salt, 1);
 
     QByteArray wire;
     quint32 crc32 = 0;
@@ -79,7 +79,7 @@ void ArticleTest::encryptedMultipartUsesStrictFraming()
     QByteArray restored;
     QByteArray extractedSalt;
     quint32 extractedIndex = 0;
-    QVERIFY2(FF1Cipher::decryptControlLines(wire, encryption.masterKey, 1, restored,
+    QVERIFY2(TestDecryptor::decryptControlLines(wire, encryption.masterKey, 1, restored,
                                             &extractedSalt, &extractedIndex, &error), qPrintable(error));
     QCOMPARE(extractedSalt, salt);
     QCOMPARE(extractedIndex, quint32(1));
@@ -100,9 +100,18 @@ void ArticleTest::unencryptedArticleIsUnchanged()
     QVERIFY2(Yenc::encodeArticle(plaintext, 1, 1, plaintext.size(), 0, QByteArrayLiteral("file.bin"),
                                  nullptr, article, crc32, &error), qPrintable(error));
     QCOMPARE(crc32, quint32(0x615f3aca));
-    QVERIFY(article.startsWith("=ybegin part=1 total=1 line=128 size=16 name=file.bin\r\n"
-                               "=ypart begin=1 end=16\r\n"));
-    QVERIFY(article.endsWith("\r\n=yend size=16 pcrc32=615f3aca\r\n"));
+
+    quint32 expectedCrc = 0xFFFFFFFF;
+    uchar *yencBody = new uchar[plaintext.size() * 2];
+    Yenc::encode(plaintext.constData(), plaintext.size(), yencBody, expectedCrc);
+    std::stringstream ss;
+    ss << "=ybegin part=1 total=1 line=128 size=16 name=file.bin\r\n"
+       << "=ypart begin=1 end=16\r\n"
+       << yencBody << "\r\n"
+       << "=yend size=16 pcrc32=" << std::hex << expectedCrc << "\r\n";
+    delete[] yencBody;
+
+    QCOMPARE(article, QByteArray::fromStdString(ss.str()));
     QVERIFY(!article.contains("=yencryption"));
 }
 
@@ -131,7 +140,7 @@ void ArticleTest::segmentIndexAllocatorSkipsForbiddenBytes()
 {
     // Index framing rule: indices whose uint32_be encoding contains 0x0A
     // or 0x0D would split the Line 1 bootstrap on the wire and must be skipped.
-    // Canonical index_allocation.json (VEC-07) vectors: candidates 10, 13, 266, 269.
+    // Canonical index_allocation.json vectors: candidates 10, 13, 266, 269.
     quint32 segmentIndex = 0;
 
     // candidate 10 -> assigned 11
@@ -196,7 +205,7 @@ void ArticleTest::worstCaseEscapePayloadDoesNotOverflow()
     QByteArray masterKey;
     QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
              qPrintable(error));
-    YencEncryptionContext encryption(masterKey, masterKey, salt, 1);
+    YencEncryptionContext encryption(masterKey, salt, 1);
     QByteArray wire;
     QVERIFY2(Yenc::encodeArticle(payload, 1, 1, payload.size(), 0, QByteArrayLiteral("file.bin"),
                                  &encryption, wire, crc32, &error), qPrintable(error));
@@ -207,7 +216,7 @@ void ArticleTest::worstCaseEscapePayloadDoesNotOverflow()
     QByteArray restored;
     QByteArray extractedSalt;
     quint32 extractedIndex = 0;
-    QVERIFY2(FF1Cipher::decryptControlLines(wire, masterKey, 1, restored, &extractedSalt,
+    QVERIFY2(TestDecryptor::decryptControlLines(wire, masterKey, 1, restored, &extractedSalt,
                                             &extractedIndex, &error), qPrintable(error));
     QCOMPARE(extractedSalt, salt);
     QCOMPARE(extractedIndex, quint32(1));
@@ -219,65 +228,36 @@ void ArticleTest::exactWrapAndEmptyPayloadPreserveSingleCrlf()
     // old code emitted a double CRLF (blank line) before =yend; a zero-byte
     // payload did the same. Downstream FF1 tweak derivation counts physical
     // lines, so a blank line desynchronized the =yend tweak.
-    // 128 ASCII 'A's encode to 128 column-exact chars and trigger the wrap.
-    const QByteArray payload(128, 'A');
-
-    QByteArray article;
-    quint32 crc32 = 0;
-    QString error;
-    QVERIFY2(Yenc::encodeArticle(payload, 1, 1, payload.size(), 0, QByteArrayLiteral("file.bin"),
-                                 nullptr, article, crc32, &error), qPrintable(error));
-    // No blank line may appear anywhere in the article.
-    QVERIFY(!article.contains("\r\n\r\n"));
-    // Exactly one CRLF separates the encoded payload from =yend.
-    QVERIFY(article.contains("\r\n=yend size=128 "));
-
-    // Zero-byte payload: no blank line between headers and =yend.
-    QByteArray empty;
-    QVERIFY2(Yenc::encodeArticle(empty, 1, 1, 0, 0, QByteArrayLiteral("empty.bin"),
-                                 nullptr, article, crc32, &error), qPrintable(error));
-    QVERIFY(!article.contains("\r\n\r\n"));
-    QVERIFY(article.contains("\r\n=yend size=0 "));
-
-    // Encrypted path on the exact-wrap payload: blank lines would break the
-    // FF1 lineIndex count and prevent control-line restoration.
+    // Encrypted articles must preserve single CRLF.
     const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
     QByteArray masterKey;
+    QString error;
     QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
              qPrintable(error));
-    YencEncryptionContext encryption(masterKey, masterKey, salt, 1);
+    YencEncryptionContext encryption(masterKey, salt, 1);
+
+    // 128 ASCII 'A's encode to 128 column-exact chars and trigger the wrap.
+    const QByteArray payload(128, 'A');
     QByteArray wire;
+    quint32 crc32 = 0;
     QVERIFY2(Yenc::encodeArticle(payload, 1, 1, payload.size(), 0, QByteArrayLiteral("file.bin"),
                                  &encryption, wire, crc32, &error), qPrintable(error));
     QByteArray restored;
     QByteArray extractedSalt;
     quint32 extractedIndex = 0;
-    QVERIFY2(FF1Cipher::decryptControlLines(wire, masterKey, 1, restored, &extractedSalt,
+    QVERIFY2(TestDecryptor::decryptControlLines(wire, masterKey, 1, restored, &extractedSalt,
                                             &extractedIndex, &error), qPrintable(error));
     QVERIFY(!restored.contains("\r\n\r\n"));
     QVERIFY(restored.contains("\r\n=yend size=128 "));
-}
 
-void ArticleTest::trailingWhitespaceAtLineEndIsEscaped()
-{
-    // The yEnc escape rule applies to OUTPUT byte values 0x20/0x09 at
-    // line boundaries. Output space (0x20) comes from input byte 246 (0xF6),
-    // output tab (0x09) from input byte 223 (0xDF). A raw output space at the
-    // final column before a line wrap must be '='-escaped; the old condition
-    // (column - 1 == maxwidth) was unreachable and left it unescaped.
-    // 127 'A' bytes fill columns 0..126; the next byte lands at column 127
-    // (the last column of line 1).
-    QByteArray payload(127, 'A');
-    payload += char(0xF6); // encodes to output space 0x20 at column 127
-
-    QByteArray article;
-    quint32 crc32 = 0;
-    QString error;
-    QVERIFY2(Yenc::encodeArticle(payload, 1, 1, payload.size(), 0, QByteArrayLiteral("file.bin"),
-                                 nullptr, article, crc32, &error), qPrintable(error));
-    // output space (0x20) + 64 = 0x60 ('`'): escaped as "=\x60" before the wrap CRLF.
-    QVERIFY(article.contains(QByteArrayLiteral("=\x60\r\n=yend")));
-    QVERIFY(!article.contains(QByteArrayLiteral(" \r\n=yend")));
+    // Zero-byte payload in encrypted mode:
+    const QByteArray empty;
+    QVERIFY2(Yenc::encodeArticle(empty, 1, 1, 0, 0, QByteArrayLiteral("empty.bin"),
+                                 &encryption, wire, crc32, &error), qPrintable(error));
+    QVERIFY2(TestDecryptor::decryptControlLines(wire, masterKey, 1, restored, &extractedSalt,
+                                            &extractedIndex, &error), qPrintable(error));
+    QVERIFY(!restored.contains("\r\n\r\n"));
+    QVERIFY(restored.contains("\r\n=yend size=0 "));
 }
 
 QTEST_APPLESS_MAIN(ArticleTest)

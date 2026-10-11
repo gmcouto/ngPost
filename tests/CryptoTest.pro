@@ -2,14 +2,16 @@ QT += core network testlib
 CONFIG += console c++14 testcase
 CONFIG -= app_bundle
 
-INCLUDEPATH += ../src
+INCLUDEPATH += ../src .
 
 SOURCES += \
     CryptoTest.cpp \
+    TestDecryptor.cpp \
     ../src/crypto/CryptoEngine.cpp \
     ../src/crypto/FF1Cipher.cpp
 
 HEADERS += \
+    TestDecryptor.h \
     ../src/crypto/CryptoEngine.h \
     ../src/crypto/FF1Cipher.h
 

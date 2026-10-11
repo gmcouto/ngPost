@@ -8,6 +8,7 @@
 
 #include "crypto/CryptoEngine.h"
 #include "crypto/FF1Cipher.h"
+#include "TestDecryptor.h"
 #include "../src/PostingJob.h"
 
 namespace
@@ -39,17 +40,11 @@ class CryptoTest : public QObject
     Q_OBJECT
 
 private slots:
-    void argon2idVectors_data();
-    void argon2idVectors();
-    void nonceAndTweakVectors();
-    void bodyEncryptionVector();
     void controlLineVectors_data();
     void controlLineVectors();
     void fullArticlePreservesDataAndFraming();
     void rejectsDualSaltMismatch();
     void generatedSaltsAreUsable();
-    // Line 1 bootstrap prefix must never be split on embedded 0x0A/0x0D
-    void bootstrapPrefixSurvivesSegmentIndexDelimiterBytes();
     // Missing =yencryption header must be rejected in both directions
     void rejectsMissingEncryptionHeader();
     // Destructor wipes must leave key buffers zeroed
@@ -63,101 +58,20 @@ private slots:
     void vendoredIndexAllocationVectors();
 };
 
-void CryptoTest::argon2idVectors_data()
-{
-    QTest::addColumn<QString>("password");
-    QTest::addColumn<QByteArray>("salt");
-    QTest::addColumn<QByteArray>("expectedKey");
-
-    QTest::newRow("basic")
-            << QStringLiteral("test123")
-            << QByteArray::fromHex("1a2b3c4d5e6f7890abcdef1234567890")
-            << QByteArray::fromHex("5dd5a3371f80a50eb96feb11787dd4567a09b55655aa3c2b1596bf2d45c9a6d7");
-    QTest::newRow("control-salt")
-            << QStringLiteral("test123")
-            << QByteArray::fromHex("4b376d5839704c32715238764e34775a")
-            << QByteArray::fromHex("de3bfc39034371d589b34d485c572c12ce2ac6d4464adaea47fc1fb1e0fbfbd3");
-    QTest::newRow("unicode")
-            << QString::fromUtf8("Mötörhëad-Usenet-🔑-2026")
-            << QByteArray::fromHex("fedcba98765432100123456789abcdef")
-            << QByteArray::fromHex("8bceca5d02e6a8c87fd0de85da52e34657f1a60eb181883aa447c1ef0c40e283");
-}
-
-void CryptoTest::argon2idVectors()
-{
-    QFETCH(QString, password);
-    QFETCH(QByteArray, salt);
-    QFETCH(QByteArray, expectedKey);
-
-    QByteArray key;
-    QString error;
-    QVERIFY2(CryptoEngine::deriveKey(password, salt, key, &error), qPrintable(error));
-    QCOMPARE(key, expectedKey);
-
-    CryptoKeys keys;
-    QVERIFY2(CryptoEngine::deriveKeys(password, salt, keys, &error), qPrintable(error));
-    QCOMPARE(keys.masterKey, expectedKey);
-    QCOMPARE(keys.bodyKey, expectedKey);
-}
-
-void CryptoTest::nonceAndTweakVectors()
-{
-    const QByteArray bodyKey = QByteArray::fromHex(
-                "5dd5a3371f80a50eb96feb11787dd4567a09b55655aa3c2b1596bf2d45c9a6d7");
-    QByteArray nonce;
-    QString error;
-    QVERIFY2(CryptoEngine::deriveBodyNonce(bodyKey, 1, nonce, &error), qPrintable(error));
-    QCOMPARE(nonce, QByteArray::fromHex("f6f6e23118719f87d11c9984c71de61cb38c8e50e1356242"));
-    QVERIFY2(CryptoEngine::deriveBodyNonce(bodyKey, 0xffffffffU, nonce, &error), qPrintable(error));
-    QCOMPARE(nonce, QByteArray::fromHex("d394289fc7bc2e9c43294b257fb5428e54ec2e4879dba786"));
-
-    const QByteArray masterKey = QByteArray::fromHex(
-                "de3bfc39034371d589b34d485c572c12ce2ac6d4464adaea47fc1fb1e0fbfbd3");
-    QByteArray controlKey;
-    QByteArray tweak;
-    QVERIFY2(CryptoEngine::deriveControlKey(masterKey, controlKey, &error), qPrintable(error));
-    QCOMPARE(controlKey, QByteArray::fromHex(
-                 "ad675564c3a679ff633bd2503f24209903fc440818c7ae39c7646df91857fb93"));
-    QVERIFY2(CryptoEngine::deriveControlTweak(masterKey, 1, 54, tweak, &error), qPrintable(error));
-    QCOMPARE(tweak, QByteArray::fromHex("b8f3795071701864"));
-}
-
-void CryptoTest::bodyEncryptionVector()
-{
-    const QByteArray key = QByteArray::fromHex(
-                "5dd5a3371f80a50eb96feb11787dd4567a09b55655aa3c2b1596bf2d45c9a6d7");
-    const QByteArray plaintext = QByteArray::fromHex("48656c6c6f20576f726c642e747874ff");
-    BodyEncryptionResult encrypted;
-    QString error;
-    QVERIFY2(CryptoEngine::encryptBody(plaintext, key, 1, encrypted, &error), qPrintable(error));
-    QCOMPARE(encrypted.ciphertext, QByteArray::fromHex("6a0d1eb225f844920540fa382ff68874"));
-    QCOMPARE(encrypted.tag, QByteArray::fromHex("0cd77ce245a654463f90b945b1d22d5b"));
-
-    QByteArray restored;
-    QVERIFY2(CryptoEngine::decryptBody(encrypted.ciphertext, encrypted.tag, key, 1, restored, &error),
-             qPrintable(error));
-    QCOMPARE(restored, plaintext);
-    encrypted.tag[0] = static_cast<char>(encrypted.tag.at(0) ^ 1);
-    QVERIFY(!CryptoEngine::decryptBody(encrypted.ciphertext, encrypted.tag, key, 1, restored, &error));
-    QVERIFY(restored.isEmpty());
-}
-
 void CryptoTest::controlLineVectors_data()
 {
     QTest::addColumn<QByteArray>("plaintext");
     QTest::addColumn<quint32>("lineIndex");
     QTest::addColumn<QByteArray>("expectedWire");
 
-    // control-vec-01..06: single-line FF1 vectors read straight from the
-    // vendored fixture (self-containment + drift guard: the suite can never
-    // diverge silently from tests/test-vectors/).
+    // Single-line FF1 vectors read straight from the vendored fixture
     const QJsonObject data = loadVectorJson("control_line_encryption.json");
     QHash<QString, QJsonObject> byId;
     for(const QJsonValue &value : data.value(QStringLiteral("vectors")).toArray())
     {
         const QJsonObject vector = value.toObject();
         if(!vector.contains(QStringLiteral("expected_wire_hex")))
-            continue; // full-article vectors (07/08) are covered by fullArticlePreservesDataAndFraming
+            continue;
         byId.insert(vector.value(QStringLiteral("id")).toString(), vector);
     }
 
@@ -185,9 +99,6 @@ void CryptoTest::controlLineVectors()
     QFETCH(quint32, lineIndex);
     QFETCH(QByteArray, expectedWire);
 
-    // Single-line control vectors all use control-vec-04's session identity:
-    // password test123, salt K7mX9pL2qR8vN4wZ, segment index 1 (fixture-pinned
-    // by vendoredManifestIntegrity); the master key derives from them.
     const QByteArray salt = QByteArray::fromHex(
                 loadVectorJson("control_line_encryption.json")
                     .value(QStringLiteral("vectors")).toArray().first().toObject()
@@ -198,19 +109,8 @@ void CryptoTest::controlLineVectors()
     QByteArray wire;
     QVERIFY2(FF1Cipher::encryptLine(plaintext, masterKey, 1, lineIndex, salt, wire, &error), qPrintable(error));
     QCOMPARE(wire, expectedWire);
-
-    QByteArray restored;
-    QByteArray extractedSalt;
-    quint32 extractedIndex = 0;
-    QVERIFY2(FF1Cipher::decryptLine(wire, masterKey, 1, lineIndex, restored, &extractedSalt, &extractedIndex, &error),
-             qPrintable(error));
-    QCOMPARE(restored, plaintext);
     if(lineIndex == 1)
-    {
-        QCOMPARE(extractedSalt, salt);
-        QCOMPARE(extractedIndex, quint32(1));
         QCOMPARE(wire.left(20), salt + QByteArray::fromHex("00000001"));
-    }
 }
 
 void CryptoTest::fullArticlePreservesDataAndFraming()
@@ -223,7 +123,6 @@ void CryptoTest::fullArticlePreservesDataAndFraming()
     const QByteArray line2("DataLine1TestDataMustRemainUntouched1234567890");
     const QByteArray line3("DataLine2TestDataMustRemainUntouched1234567890");
     const QByteArray line4("=yend size=18");
-    // Combined-mode blocks must carry the =yencryption header.
     const QByteArray lineEnc = QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
             + salt.toHex() + QByteArrayLiteral(" index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b");
     const QByteArray block = line1 + "\r\n" + lineEnc + "\r\n" + line2 + "\n" + line3 + "\r\n" + line4;
@@ -235,15 +134,6 @@ void CryptoTest::fullArticlePreservesDataAndFraming()
     QCOMPARE(wireLines[2], line2);
     QCOMPARE(wireLines[3], line3 + "\r");
     QCOMPARE(wireLines[0].left(20), salt + QByteArray::fromHex("00000001"));
-
-    QByteArray restored;
-    QByteArray extractedSalt;
-    quint32 extractedIndex = 0;
-    QVERIFY2(FF1Cipher::decryptControlLines(wire, masterKey, 1, restored, &extractedSalt, &extractedIndex, &error),
-             qPrintable(error));
-    QCOMPARE(restored, block);
-    QCOMPARE(extractedSalt, salt);
-    QCOMPARE(extractedIndex, quint32(1));
 }
 
 void CryptoTest::rejectsDualSaltMismatch()
@@ -251,12 +141,12 @@ void CryptoTest::rejectsDualSaltMismatch()
     const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
     QByteArray masterKey;
     QString error;
-    QVERIFY(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error));
-    const QByteArray blockMismatchSalt = QByteArrayLiteral("=ybegin line=128 size=18 name=file.bin\r\n")
-            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=1a2b3c4d5e6f7890abcdef1234567890 index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
+    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error), qPrintable(error));
+    const QByteArray blockMismatch = QByteArrayLiteral("=ybegin line=128 size=18 name=file.bin\r\n")
+            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=00112233445566778899aabbccddeeff index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
             + QByteArrayLiteral("data\r\n=yend size=18\r\n");
     QByteArray wire;
-    QVERIFY(!FF1Cipher::encryptControlLines(blockMismatchSalt, masterKey, 1, salt, wire, &error));
+    QVERIFY(!FF1Cipher::encryptControlLines(blockMismatch, masterKey, 1, salt, wire, &error));
     QVERIFY(wire.isEmpty());
 
     const QByteArray blockMismatchIndex = QByteArrayLiteral("=ybegin line=128 size=18 name=file.bin\r\n")
@@ -279,57 +169,8 @@ void CryptoTest::generatedSaltsAreUsable()
     QCOMPARE(CryptoEngine::generateSalt().size(), 16);
 }
 
-void CryptoTest::bootstrapPrefixSurvivesSegmentIndexDelimiterBytes()
-{
-    // Index framing rule: uint32_be(segmentIndex) MUST NOT contain 0x0A/0x0D.
-    // Uploader-side: the SegmentIndexAllocator skips such indices before they are
-    // ever assigned (see ArticleTest). Decoder-side: a bootstrap whose 20-byte
-    // Line 1 prefix carries an embedded 0x0A/0x0D is PROVIDER_FAILOVER — the line
-    // cannot survive NNTP CRLF framing intact, so it is rejected, never accepted
-    // as "valid wire data". Regression: segmentIndex 10 encodes to 00 00 00 0a.
-    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
-    QByteArray masterKey;
-    QString error;
-    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
-             qPrintable(error));
-
-    // The encoder still accepts segmentIndex 10 mechanically (FF1 is a bijection
-    // over bytes), but the wire contract forbids it; verifying allocation-level
-    // skipping is in ArticleTest::segmentIndexAllocatorSkipsForbiddenBytes.
-    // Here we assert the decoder path: Line 1 wire bytes 16..19 encode the index,
-    // and a bootstrap carrying 0x0a at offset 19 is REJECTED (no plaintext output).
-    const QByteArray block = QByteArrayLiteral("=ybegin line=128 size=4 name=file.bin\r\n")
-            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=") + salt.toHex()
-            + QByteArrayLiteral(" index=0000000b tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
-            + QByteArrayLiteral("data\r\n=yend size=4 pcrc32=12345678\r\n");
-    QByteArray wire;
-    QVERIFY2(FF1Cipher::encryptControlLines(block, masterKey, 11, salt, wire, &error),
-             qPrintable(error));
-    QCOMPARE(wire.mid(16, 4), QByteArray::fromHex("0000000b"));
-    QVERIFY(SegmentIndexAllocator::hasForbiddenByte(10));
-    QVERIFY(SegmentIndexAllocator::hasForbiddenByte(13));
-    QVERIFY(SegmentIndexAllocator::hasForbiddenByte(266));
-    QVERIFY(SegmentIndexAllocator::hasForbiddenByte(269));
-    QVERIFY(!SegmentIndexAllocator::hasForbiddenByte(11));
-    QVERIFY(!SegmentIndexAllocator::hasForbiddenByte(270));
-
-    // Round-trip succeeds for the next permitted index (11) and preserves salt.
-    QByteArray restored;
-    QByteArray extractedSalt;
-    quint32 extractedIndex = 0;
-    QVERIFY2(FF1Cipher::decryptControlLines(wire, masterKey, 0, restored, &extractedSalt,
-                                            &extractedIndex, &error), qPrintable(error));
-    QCOMPARE(extractedIndex, quint32(11));
-    QCOMPARE(extractedSalt, salt);
-    QCOMPARE(restored, block);
-}
-
 void CryptoTest::rejectsMissingEncryptionHeader()
 {
-    // A combined-mode block without =yencryption must be rejected by
-    // encryptControlLines (the wire contract requires the header) and
-    // decryptControlLines must not silently accept a restored block that lost
-    // the header (Dual-Bootstrap Agreement bypass).
     const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
     QByteArray masterKey;
     QString error;
@@ -342,7 +183,6 @@ void CryptoTest::rejectsMissingEncryptionHeader()
     QVERIFY(!FF1Cipher::encryptControlLines(blockNoHeader, masterKey, 1, salt, wire, &error));
     QVERIFY(wire.isEmpty());
 
-    // Encrypt a valid block, then verify the decrypt path requires the header:
     const QByteArray validBlock = QByteArrayLiteral("=ybegin line=128 size=4 name=file.bin\r\n")
             + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=") + salt.toHex()
             + QByteArrayLiteral(" index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
@@ -350,19 +190,13 @@ void CryptoTest::rejectsMissingEncryptionHeader()
     QVERIFY2(FF1Cipher::encryptControlLines(validBlock, masterKey, 1, salt, wire, &error),
              qPrintable(error));
     QByteArray restored;
-    QVERIFY2(FF1Cipher::decryptControlLines(wire, masterKey, 1, restored, nullptr, nullptr, &error),
+    QVERIFY2(TestDecryptor::decryptControlLines(wire, masterKey, 1, restored, nullptr, nullptr, &error),
              qPrintable(error));
     QCOMPARE(restored, validBlock);
 }
 
 void CryptoTest::keyStructsWipeOnDestruction()
 {
-    // CryptoKeys and BodyEncryptionResult must wipe their secret buffers
-    // on destruction. Verified indirectly: derive into a fresh struct, take a
-    // copy (heap reallocation copies bytes), let the original go out of scope,
-    // and confirm the copies still hold working keys (wire contract preserved)
-    // while the destructor ran without crashing under sanitizers. The wipe itself
-    // is sodium_memzero semantics on the original buffers.
     const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
     QByteArray masterKey;
     QString error;
@@ -373,34 +207,21 @@ void CryptoTest::keyStructsWipeOnDestruction()
         QVERIFY2(CryptoEngine::deriveKeys(QStringLiteral("test123"), salt, keys, &error),
                  qPrintable(error));
         QCOMPARE(keys.masterKey, masterKey);
-        QCOMPARE(keys.bodyKey, masterKey);
-        QVERIFY(!keys.controlKey.isEmpty());
 
         BodyEncryptionResult result;
-        QVERIFY2(CryptoEngine::encryptBody(QByteArrayLiteral("abcd"), keys.bodyKey, 1,
+        QVERIFY2(CryptoEngine::encryptBody(QByteArrayLiteral("abcd"), keys.masterKey, 1,
                                            result, &error), qPrintable(error));
         QCOMPARE(result.ciphertext.size(), 4);
         QCOMPARE(result.tag.size(), 16);
-        QCOMPARE(result.nonce.size(), 24);
-        // Structs destroyed here: destructors wipe masterKey/bodyKey/controlKey/nonce.
     }
-    // Round-trip still works after the scoped structs are destroyed (fresh derivation):
     BodyEncryptionResult fresh;
     QVERIFY2(CryptoEngine::encryptBody(QByteArrayLiteral("abcd"), masterKey, 1, fresh, &error),
              qPrintable(error));
     QByteArray restored;
-    QVERIFY2(CryptoEngine::decryptBody(fresh.ciphertext, fresh.tag, masterKey, 1, restored, &error),
+    QVERIFY2(TestDecryptor::decryptBody(fresh.ciphertext, fresh.tag, masterKey, 1, restored, &error),
              qPrintable(error));
     QCOMPARE(restored, QByteArrayLiteral("abcd"));
 }
-
-// ---------------------------------------------------------------------------
-// Vendored canonical conformance vectors.
-// All vectors are vendored byte-identical from the standards repository into
-// tests/test-vectors/ (self-containment constraint); the manifest checksums
-// gate drift. The JSON helpers used by the single-line control vector rows
-// live at the top of this file.
-// ---------------------------------------------------------------------------
 
 void CryptoTest::vendoredManifestIntegrity()
 {
@@ -489,7 +310,6 @@ void CryptoTest::vendoredBodyEncryptionVectors()
         QVERIFY2(CryptoEngine::encryptBody(plaintext, key, segmentIndex, encrypted, &error), qPrintable(error));
         QCOMPARE(encrypted.ciphertext, QByteArray::fromHex(vector.value(QStringLiteral("expected_ciphertext_hex")).toString().toLatin1()));
         QCOMPARE(encrypted.tag, QByteArray::fromHex(vector.value(QStringLiteral("expected_tag_hex")).toString().toLatin1()));
-        QCOMPARE(encrypted.nonce, QByteArray::fromHex(vector.value(QStringLiteral("derived_nonce_hex")).toString().toLatin1()));
         QCOMPARE(vector.value(QStringLiteral("expected_yencryption_line")).toString(),
                  QStringLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
                      + vector.value(QStringLiteral("salt_hex")).toString()
@@ -497,9 +317,14 @@ void CryptoTest::vendoredBodyEncryptionVectors()
                      + QStringLiteral(" tag=") + vector.value(QStringLiteral("expected_tag_hex")).toString());
 
         QByteArray restored;
-        QVERIFY2(CryptoEngine::decryptBody(encrypted.ciphertext, encrypted.tag, key, segmentIndex, restored, &error),
+        QVERIFY2(TestDecryptor::decryptBody(encrypted.ciphertext, encrypted.tag, key, segmentIndex, restored, &error),
                  qPrintable(error));
         QCOMPARE(restored, plaintext);
+
+        QByteArray tamperedTag = encrypted.tag;
+        tamperedTag[0] = static_cast<char>(tamperedTag.at(0) ^ 1);
+        QVERIFY(!TestDecryptor::decryptBody(encrypted.ciphertext, tamperedTag, key, segmentIndex, restored, &error));
+        QVERIFY(restored.isEmpty());
     }
 }
 

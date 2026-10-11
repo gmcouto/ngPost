@@ -31,6 +31,7 @@ ushort NntpArticle::sNbMaxTrySending = 5;
 NntpArticle::NntpArticle(NntpFile *file, uint part, qint64 pos, qint64 bytes,
                          const std::string *from, bool obfuscation, quint32 segmentIndex):
     _nntpFile(file), _part(part), _segmentIndex(segmentIndex),
+    _isEncrypted(segmentIndex != 0),
     _id(QUuid::createUuid()),
     _from(from),
     _subject(nullptr),
@@ -63,6 +64,9 @@ bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encry
             *error = QStringLiteral("Article segment index does not match encryption context");
         return false;
     }
+
+    if(encryption)
+        _isEncrypted = true;
 
     QByteArray block;
     quint32 crc32 = 0;
@@ -140,10 +144,9 @@ void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
     // RFC 3977 §3.1.1 dot-stuffing: a body line whose first
     // byte is 0x2E must have that byte doubled before the socket write, or the
     // server strips it — corrupting e.g. the Line 1 bootstrap of encrypted
-    // articles. Applied to the BODY only: the header/protocol writes above are
-    // never stuffed. The trailing article terminator ("\r\n.\r\n") is exempt —
-    // it IS the terminator and must reach the server unstuffed.
-    if(_body && _bodySize > 0 && articleBodyNeedsDotStuffing())
+    // articles. Applied only to encrypted articles; unencrypted articles are
+    // sent directly. The trailing article terminator ("\r\n.\r\n") is exempt.
+    if(_isEncrypted && _body && _bodySize > 0 && articleBodyNeedsDotStuffing())
     {
         static thread_local QByteArray stuffedBody;
         stuffedBody.resize(static_cast<int>(_bodySize * 2));
