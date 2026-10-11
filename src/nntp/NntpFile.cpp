@@ -21,7 +21,6 @@
 #include "PostingJob.h"
 #include "NgPost.h"
 #include "NntpArticle.h"
-#include "NzbWriter.h"
 #include <cmath>
 #include <QTextStream>
 #include <QDebug>
@@ -141,15 +140,17 @@ void NntpFile::writeToNZB(QTextStream &stream, const QString &from)
 
         stream << tab << tab << "<groups>\n";
         for (const QString &grp : _grpList)
-            stream << tab << tab << tab << "<group>" << NgPost::escapeXML(grp) << "</group>\n";
+            stream << tab << tab << tab << "<group>" << grp << "</group>\n";
         stream << tab << tab << "</groups>\n";
 
         stream << tab << tab << "<segments>\n";
         for (NntpArticle *article : _articles)
         {
-            NzbWriter::writeSegment(stream, tab + tab + tab, article->_fileBytes,
-                                    article->_part, article->_msgId);
-
+            stream << tab << tab << tab << "<segment"
+                   << " bytes=\""  << article->_fileBytes << "\""
+                   << " number=\"" << article->_part << "\">"
+                   << article->_msgId
+                   << "</segment>\n";
         }
         stream << tab << tab << "</segments>\n";
 

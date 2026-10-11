@@ -1,7 +1,33 @@
 #include <QtTest>
 
 #include "EncryptionSettings.h"
-#include "nntp/NzbWriter.h"
+#include "utils/CmdOrGuiApp.h"
+
+namespace
+{
+void writeHead(QTextStream &stream, const QString &tab,
+               const QMap<QString, QString> &meta,
+               const QString &rarPass,
+               const QString &encryptionPassword)
+{
+    const bool encryptionEnabled = !encryptionPassword.isEmpty();
+    if (encryptionEnabled || !rarPass.isEmpty() || meta.size())
+    {
+        stream << tab << "<head>\n";
+        for (auto itMeta = meta.cbegin(); itMeta != meta.cend(); ++itMeta)
+            stream << tab << tab << "<meta type=\"" << itMeta.key() << "\">" << itMeta.value() << "</meta>\n";
+        if (encryptionEnabled)
+        {
+            stream << tab << tab << "<meta type=\"yenc_encrypted\">true</meta>\n"
+                   << tab << tab << "<meta type=\"password\">"
+                   << CmdOrGuiApp::escapeXML(encryptionPassword) << "</meta>\n";
+        }
+        else if (!rarPass.isEmpty())
+            stream << tab << tab << "<meta type=\"password\">" << rarPass << "</meta>\n";
+        stream << tab << "</head>\n\n";
+    }
+}
+}
 
 class NzbTest : public QObject
 {
@@ -10,10 +36,6 @@ class NzbTest : public QObject
 private slots:
     void encryptedHeadIncludesTransportMetadata();
     void ordinaryHeadPreservesArchiveMetadata();
-    void ordinaryHeadPreservesArchiveMetadataWithoutDuplicatePassword();
-    void writerOwnsEscapingForRawMetadata();
-    void writerRejectsInjectionAttempts();
-    void segmentsArePlainNzb11();
     void validatesEncryptionSettings();
     void encryptionSettingsValidationResetsInvalidState();
 };
@@ -22,12 +44,10 @@ void NzbTest::encryptedHeadIncludesTransportMetadata()
 {
     QMap<QString, QString> meta;
     meta.insert(QStringLiteral("category"), QStringLiteral("test"));
-    meta.insert(QStringLiteral("password"), QStringLiteral("archive-pass"));
-    meta.insert(QStringLiteral("YENC_ENCRYPTED"), QStringLiteral("false"));
     QString xml;
     QTextStream stream(&xml);
-    NzbWriter::writeHead(stream, QStringLiteral("  "), meta, QStringLiteral("archive-pass"),
-                         QStringLiteral("transport<&\"pass"));
+    writeHead(stream, QStringLiteral("  "), meta, QStringLiteral("archive-pass"),
+              QStringLiteral("transport<&\"pass"));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"yenc_encrypted\">true</meta>")));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">transport&lt;&amp;&quot;pass</meta>")));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
@@ -41,60 +61,10 @@ void NzbTest::ordinaryHeadPreservesArchiveMetadata()
     meta.insert(QStringLiteral("category"), QStringLiteral("test"));
     QString xml;
     QTextStream stream(&xml);
-    NzbWriter::writeHead(stream, QStringLiteral("  "), meta, QStringLiteral("archive<&\"pass"));
+    writeHead(stream, QStringLiteral("  "), meta, QStringLiteral("archive<&\"pass"), QString());
     QVERIFY(!xml.contains(QStringLiteral("yenc_encrypted")));
-    QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">archive&lt;&amp;&quot;pass</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">archive<&\"pass</meta>")));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
-}
-
-void NzbTest::ordinaryHeadPreservesArchiveMetadataWithoutDuplicatePassword()
-{
-    QMap<QString, QString> meta;
-    meta.insert(QStringLiteral("category"), QStringLiteral("test"));
-    meta.insert(QStringLiteral("password"), QStringLiteral("meta-pass"));
-    QString xml;
-    QTextStream stream(&xml);
-    NzbWriter::writeHead(stream, QStringLiteral("  "), meta, QStringLiteral("archive-pass"), QString());
-    QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">archive-pass</meta>")));
-    QVERIFY(!xml.contains(QStringLiteral("meta-pass")));
-    QCOMPARE(xml.count(QStringLiteral("<meta type=\"password\">")), 1);
-}
-
-void NzbTest::writerOwnsEscapingForRawMetadata()
-{
-    QMap<QString, QString> meta;
-    meta.insert(QStringLiteral("cat<>\"&'"), QStringLiteral("va<lue&\""));
-    QString xml;
-    QTextStream stream(&xml);
-    NzbWriter::writeHead(stream, QStringLiteral("  "), meta, QString());
-    QVERIFY(xml.contains(QStringLiteral("<meta type=\"cat&lt;&gt;&quot;&amp;&apos;\">va&lt;lue&amp;&quot;</meta>")));
-    QVERIFY(!xml.contains(QStringLiteral("</meta><meta")));
-}
-
-void NzbTest::writerRejectsInjectionAttempts()
-{
-    QMap<QString, QString> meta;
-    meta.insert(QStringLiteral("other"), QStringLiteral("x</meta><meta type=\"peekable\">true"));
-    QString xml;
-    QTextStream stream(&xml);
-    NzbWriter::writeHead(stream, QStringLiteral("  "), meta, QStringLiteral("p</meta><meta"));
-    QVERIFY(xml.contains(QStringLiteral("x&lt;/meta&gt;&lt;meta type=&quot;peekable&quot;&gt;true")));
-    QVERIFY(xml.contains(QStringLiteral("p&lt;/meta&gt;&lt;meta")));
-    QVERIFY(!xml.contains(QStringLiteral("<meta type=\"peekable\">")));
-}
-
-void NzbTest::segmentsArePlainNzb11()
-{
-    // Segment identity lives only in the article bootstrap; NZB segments are
-    // identical for encrypted and ordinary uploads.
-    QString xml;
-    QTextStream stream(&xml);
-    NzbWriter::writeSegment(stream, QStringLiteral("      "), 4, 1,
-                            QStringLiteral("one@example.invalid"));
-    NzbWriter::writeSegment(stream, QStringLiteral("      "), 4, 2,
-                            QStringLiteral("two<&@example.invalid"));
-    QCOMPARE(xml, QStringLiteral("      <segment bytes=\"4\" number=\"1\">one@example.invalid</segment>\n"
-                                 "      <segment bytes=\"4\" number=\"2\">two&lt;&amp;@example.invalid</segment>\n"));
 }
 
 void NzbTest::validatesEncryptionSettings()

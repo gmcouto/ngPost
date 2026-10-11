@@ -47,19 +47,8 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
     _job->_secureDiskAccess.unlock();
     if (article)
     {
-        // F6.3: keys are derived lazily (not in the PostingJob constructor);
-        // this is the first consumer. On failure, stop the job cleanly.
-        if (!_job->_ensureEncryptionKeys())
-        {
-            _job->_error(_job->_encryptionError);
-            _job->_stopPosting = 0x1;
-            _job->_noMoreFiles = 0x1;
-            emit _job->stopPosting();
-            return nullptr;
-        }
         QString error;
-        const YencEncryptionContext encryption(_job->_encryptionKeys.bodyKey,
-                                                _job->_encryptionKeys.masterKey,
+        const YencEncryptionContext encryption(_job->_encryptionKeys.masterKey,
                                                 _job->_encryptionSalt,
                                                 article->segmentIndex());
         const YencEncryptionContext *encryptionPtr = _job->_encryptionEnabled ? &encryption : nullptr;
@@ -67,19 +56,13 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
         {
             _job->_secureDiskAccess.lock();
             article->nntpFile()->removeArticle(article);
-            // F6.4: _encryptionError is a QString shared with other builder
-            // threads; the write must stay inside the same critical section as
-            // removeArticle to avoid a refcount race on the failure path.
             _job->_encryptionError = QStringLiteral("Unable to encode article: %1").arg(error);
             _job->_secureDiskAccess.unlock();
             delete article;
             _job->_error(_job->_encryptionError);
             _job->_stopPosting = 0x1;
             _job->_noMoreFiles = 0x1;
-            // _finishPosting() is a main-thread orchestrator (qApp->processEvents,
-            // thread joins) and must never run on this builder/connection thread.
-            // onStopPosting performs the same teardown+postingFinished pair, queued
-            // onto the PostingJob's own thread (see PostingJob.cpp stopPosting wiring).
+            // onStopPosting performs teardown queued onto PostingJob's thread
             emit _job->stopPosting();
             return nullptr;
         }
@@ -94,11 +77,6 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
 
 void ArticleBuilder::onPrepareNextArticle()
 {
-    // Early-return if stop requested; avoids reading/encoding articles
-    // after an error or shutdown signal has already been raised.
-    if (MB_LoadAtomic(_job->_stopPosting))
-        return;
-
     QMutexLocker lock(&_poster->_secureArticles); // thread safety (coming from _builderThread)
 
     NntpArticle *article = getNextArticle(_poster->_builderThread.objectName());

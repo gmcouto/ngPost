@@ -5,10 +5,8 @@ CONFIG -= app_bundle
 INCLUDEPATH += ../src
 
 SOURCES += \
-    NzbTest.cpp \
-    ../src/nntp/NzbWriter.cpp
+    NzbTest.cpp
 
 HEADERS += \
     ../src/EncryptionSettings.h \
-    ../src/nntp/NzbWriter.h \
     ../src/utils/CmdOrGuiApp.h

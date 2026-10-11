@@ -23,19 +23,16 @@
 #include "nntp/NntpServerParams.h"
 #include "nntp/NntpFile.h"
 #include "nntp/NntpArticle.h"
-#include "nntp/NzbWriter.h"
 #ifdef __USE_HMI__
   #include "hmi/PostingWidget.h"
 #endif
 #include <cmath>
-#include <limits>
 #include <QDebug>
 #include <QProcess>
 #include <QThread>
 #include <QMutex>
 #include <QCoreApplication>
 #include <QDir>
-#include <sodium.h>
 
 PostingJob::PostingJob(NgPost *ngPost,
                        const QString &nzbFilePath,
@@ -88,7 +85,6 @@ PostingJob::PostingJob(NgPost *ngPost,
     _obfuscateArticles(obfuscateArticles), _obfuscateFileName(obfuscateFileName),
     _encryptionEnabled(!encryptionPassword.isEmpty()), _encryptionPassword(encryptionPassword),
     _encryptionSalt(), _encryptionKeys(),
-    _encryptionKeysMutex(), _encryptionKeysJoinMutex(), _encryptionKeysState(0), _encryptionKeysWorker(),
     _segmentIndices(), _encryptionError(),
     _delFilesAfterPost(delFilesAfterPost ? 0x1 : 0x0),
     _originalFiles(!postWidget || delFilesAfterPost  || obfuscateFileName ? files : QFileInfoList()),
@@ -129,22 +125,10 @@ PostingJob::PostingJob(NgPost *ngPost,
         connect(&_immediateSpeedTimer, &QTimer::timeout, this, &PostingJob::onImmediateSpeedComputation, Qt::QueuedConnection);
 #endif
 
-    // F6.3: the 64 MiB Argon2id KDF used to run synchronously here, stalling
-    // the HMI ~0.5-1 s per encrypted job. The salt is generated eagerly (cheap)
-    // and the derivation is kicked off on a worker thread so it overlaps
-    // packing/compression; _ensureEncryptionKeys() joins it before first use.
+    // The salt is generated eagerly (cheap); the Argon2id key derivation runs
+    // synchronously in onStartPosting, before any article is encoded.
     if(_encryptionEnabled)
-    {
         _encryptionSalt = CryptoEngine::generateControlSalt();
-        try {
-            _encryptionKeysWorker = std::thread(&PostingJob::_deriveEncryptionKeysWorker, this);
-        }
-        catch(const std::system_error &) {
-            // thread creation failed: degrade to synchronous derivation so the
-            // behavior (keys ready or clean failure) is preserved.
-            _deriveEncryptionKeysWorker();
-        }
-    }
 
     if (ngPost->debugMode())
         _log(NntpConnection::sslSupportInfo());
@@ -179,23 +163,10 @@ PostingJob::~PostingJob()
     qDeleteAll(_closedConnections);
     qDeleteAll(_posters);
 
-    // F6.3: join the KDF worker before wiping the key material it writes
-    // (serialized like _ensureEncryptionKeys; concurrent join() is UB).
-    _encryptionKeysJoinMutex.lock();
-    if(_encryptionKeysWorker.joinable())
-        _encryptionKeysWorker.join();
-    _encryptionKeysJoinMutex.unlock();
-
     if (_nzb)
         delete _nzb;
     if (_file)
         delete _file;
-    if(!_encryptionKeys.masterKey.isEmpty())
-        sodium_memzero(_encryptionKeys.masterKey.data(), static_cast<size_t>(_encryptionKeys.masterKey.size()));
-    if(!_encryptionKeys.bodyKey.isEmpty())
-        sodium_memzero(_encryptionKeys.bodyKey.data(), static_cast<size_t>(_encryptionKeys.bodyKey.size()));
-    if(!_encryptionKeys.controlKey.isEmpty())
-        sodium_memzero(_encryptionKeys.controlKey.data(), static_cast<size_t>(_encryptionKeys.controlKey.size()));
     _encryptionPassword.detach();
     _encryptionPassword.fill(QChar(0));
     _encryptionPassword.clear();
@@ -268,44 +239,13 @@ bool PostingJob::_ensureEncryptionKeys()
 {
     if(!_encryptionEnabled)
         return true;
-
-    // Join the KDF worker spawned in the constructor. Concurrent join() on one
-    // std::thread is undefined behavior, so the join is serialized by a
-    // dedicated mutex (never held by the worker itself => no deadlock).
-    _encryptionKeysJoinMutex.lock();
-    if(_encryptionKeysWorker.joinable())
-        _encryptionKeysWorker.join();
-    _encryptionKeysJoinMutex.unlock();
-
-    _encryptionKeysMutex.lock();
-    const bool ready = _encryptionKeysState == 1;
-    _encryptionKeysMutex.unlock();
-    return ready;
-}
-
-void PostingJob::_deriveEncryptionKeysWorker()
-{
-    _encryptionKeysMutex.lock();
-    if(_encryptionKeysState != 0) // already derived (or failed) by an earlier call
-    {
-        _encryptionKeysMutex.unlock();
-        return;
-    }
-    // Derive outside the critical section: this is the expensive 64 MiB
-    // Argon2id call; only the state update below needs the mutex.
-    _encryptionKeysMutex.unlock();
+    if(!_encryptionKeys.masterKey.isEmpty())
+        return true;
     QString error;
-    const bool ok = _encryptionSalt.size() == 16
-            && CryptoEngine::deriveKeys(_encryptionPassword, _encryptionSalt, _encryptionKeys, &error);
-    _encryptionKeysMutex.lock();
-    if(ok)
-        _encryptionKeysState = 1;
-    else
-    {
-        _encryptionError = QStringLiteral("Unable to initialize upload encryption");
-        _encryptionKeysState = 2;
-    }
-    _encryptionKeysMutex.unlock();
+    if(_encryptionSalt.size() == 16 && CryptoEngine::deriveKeys(_encryptionPassword, _encryptionSalt, _encryptionKeys, &error))
+        return true;
+    _encryptionError = QStringLiteral("Unable to initialize upload encryption");
+    return false;
 }
 
 void PostingJob::onStartPosting(bool isActiveJob)
@@ -435,12 +375,6 @@ void PostingJob::_postFiles()
         emit archiveFileNames(archiveNames);
     }
     _initPosting();
-    if(MB_LoadAtomic(_stopPosting))
-    {
-        _finishPosting();
-        emit postingFinished();
-        return;
-    }
 
     if (_nbThreads > QThread::idealThreadCount())
         _nbThreads = QThread::idealThreadCount();
@@ -469,8 +403,21 @@ void PostingJob::_postFiles()
                    << "<!DOCTYPE nzb PUBLIC \"-//newzBin//DTD NZB 1.1//EN\" \"http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd\">\n"
                    << "<nzb xmlns=\"http://www.newzbin.com/DTD/2003/nzb\">\n";
 
-        NzbWriter::writeHead(_nzbStream, tab, _ngPost->_meta, _rarPass,
-                             _encryptionEnabled ? _encryptionPassword : QString());
+        if (_encryptionEnabled || !_rarPass.isEmpty() || _ngPost->_meta.size())
+        {
+            _nzbStream << tab << "<head>\n";
+            for (auto itMeta = _ngPost->_meta.cbegin(); itMeta != _ngPost->_meta.cend() ; ++itMeta)
+                _nzbStream << tab << tab << "<meta type=\"" << itMeta.key() << "\">" << itMeta.value() << "</meta>\n";
+            if (_encryptionEnabled)
+            {
+                _nzbStream << tab << tab << "<meta type=\"yenc_encrypted\">true</meta>\n"
+                           << tab << tab << "<meta type=\"password\">"
+                           << NgPost::escapeXML(_encryptionPassword) << "</meta>\n";
+            }
+            else if (!_rarPass.isEmpty())
+                _nzbStream << tab << tab << "<meta type=\"password\">" << _rarPass << "</meta>\n";
+            _nzbStream << tab << "</head>\n\n";
+        }
         _nzbStream << MB_FLUSH;
     }
 
@@ -780,7 +727,7 @@ NntpArticle *PostingJob::_readNextArticleIntoBufferPtr(const QString &threadName
             quint32 segmentIndex = 0;
             if(_encryptionEnabled && !_segmentIndices.next(segmentIndex))
             {
-                // F6.4: worker-thread write, protected by the held _secureDiskAccess
+                // worker-thread write, protected by the held _secureDiskAccess
                 _encryptionError = QStringLiteral("Encrypted release exceeds segmentIndex range");
                 _error(_encryptionError);
                 _stopPosting = 0x1;
@@ -845,7 +792,6 @@ void PostingJob::_initPosting()
     _filesToUpload.reserve(static_cast<int>(_nbFiles));
     uint fileNum = 0;
     int nbGroups = _grpList.size();
-    quint64 totalArticles = 0;
     for (const QFileInfo &file : _files)
     {
         NntpFile *nntpFile = new NntpFile(this,
@@ -861,16 +807,8 @@ void PostingJob::_initPosting()
             connect(nntpFile, &NntpFile::startPosting, this, &PostingJob::onNntpFileStartPosting, Qt::QueuedConnection);
 
         _filesToUpload.enqueue(nntpFile);
-        totalArticles += nntpFile->nbArticles();
+        _nbArticlesTotal += nntpFile->nbArticles();
     }
-    if(_encryptionEnabled && totalArticles > std::numeric_limits<quint32>::max())
-    {
-        _encryptionError = QStringLiteral("Encrypted release exceeds segmentIndex range");
-        _error(_encryptionError);
-        _stopPosting = 0x1;
-        _noMoreFiles = 0x1;
-    }
-    _nbArticlesTotal = static_cast<uint>(totalArticles);
     emit articlesNumber(_nbArticlesTotal);
 }
 
