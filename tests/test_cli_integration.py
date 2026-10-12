@@ -194,6 +194,34 @@ def main():
 
     all_passed &= run_test("NP-1: --compress --gen_pass --encrypt reuses transport pass", test_np1_gen_pass_encrypt)
 
+    def test_np3_gen_pass_encrypt_without_password():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_file = os.path.join(tmpdir, "test.txt")
+            with open(sample_file, "wb") as f:
+                f.write(b"Hello Usenet encrypted compression world!")
+
+            nzb_out = os.path.join(tmpdir, "out.nzb")
+            cmd = [
+                ngpost_bin,
+                "--server", "user:pass@@@127.0.0.1:11999:1:nossl",
+                "-g", "alt.binaries.test",
+                "-o", nzb_out,
+                "-i", sample_file,
+                "--compress",
+                "--gen_pass",
+                "--encrypt",
+                "--tmp_dir", tmpdir,
+                "--rar_path", "/bin/true",
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            if res.returncode == 0:
+                raise AssertionError("Expected non-zero exit code for --encrypt without a password")
+            err = res.stderr.decode("utf-8", errors="replace") + res.stdout.decode("utf-8", errors="replace")
+            if "non-empty password" not in err:
+                raise AssertionError(f"Expected 'non-empty password' error, got: {err}")
+
+    all_passed &= run_test("NP-3: --compress --gen_pass --encrypt without password fails", test_np3_gen_pass_encrypt_without_password)
+
     # Test 2: NP-1 Conflict: explicit --rar_pass differs from --encrypt-password
     def test_np1_conflicting_archive_pass():
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -248,6 +276,131 @@ def main():
                 raise AssertionError(f"Expected conflict error message, got: {err}")
 
     all_passed &= run_test("NP-2: Conflicting -m password rejected", test_np2_conflicting_meta_password)
+
+    # NP-2 (F2): only the first '=' separates key and value in -m, so a value with '=' is kept.
+    def test_np2_meta_password_with_equals_matching():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                sample_file = os.path.join(tmpdir, "test.txt")
+                with open(sample_file, "wb") as f:
+                    f.write(b"content")
+
+                nzb_out = os.path.join(tmpdir, "out.nzb")
+                cmd = [
+                    ngpost_bin,
+                    "-s", "false",
+                    "--server", f"user:pass@@@127.0.0.1:{server.port}:1:nossl",
+                    "-g", "alt.binaries.test",
+                    "-f", "tester@example.com",
+                    "-o", nzb_out,
+                    "-i", sample_file,
+                    "-m", "password=a=b",
+                    "--encrypt",
+                    "--encrypt-password", "a=b",
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+                err = res.stderr.decode("utf-8", errors="replace") + res.stdout.decode("utf-8", errors="replace")
+                if res.returncode != 0:
+                    raise AssertionError(f"Expected exit 0 for matching -m password containing '=', got {res.returncode}: {err}")
+                if "conflict" in err.lower():
+                    raise AssertionError(f"Unexpected conflict error for matching password: {err}")
+                with open(nzb_out, "r", encoding="utf-8") as f:
+                    nzb_content = f.read()
+                if '<meta type="password">a=b</meta>' not in nzb_content:
+                    raise AssertionError(f"NZB missing password meta with '=' in value: {nzb_content}")
+            finally:
+                server.close()
+
+    all_passed &= run_test("NP-2: -m password containing '=' matches --encrypt-password without conflict", test_np2_meta_password_with_equals_matching)
+
+    def test_np2_meta_password_with_equals_kept_without_encrypt():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                sample_file = os.path.join(tmpdir, "test.txt")
+                with open(sample_file, "wb") as f:
+                    f.write(b"content")
+
+                nzb_out = os.path.join(tmpdir, "out.nzb")
+                cmd = [
+                    ngpost_bin,
+                    "-s", "false",
+                    "--server", f"user:pass@@@127.0.0.1:{server.port}:1:nossl",
+                    "-g", "alt.binaries.test",
+                    "-f", "tester@example.com",
+                    "-o", nzb_out,
+                    "-i", sample_file,
+                    "-m", "password=a=b",
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+                if res.returncode != 0:
+                    raise AssertionError(f"Process failed (code {res.returncode}): {res.stderr.decode('utf-8', errors='replace')}")
+                with open(nzb_out, "r", encoding="utf-8") as f:
+                    nzb_content = f.read()
+                if '<meta type="password">a=b</meta>' not in nzb_content:
+                    raise AssertionError(f"-m password value containing '=' was dropped: {nzb_content}")
+            finally:
+                server.close()
+
+    all_passed &= run_test("NP-2: -m password containing '=' is kept in NZB without --encrypt", test_np2_meta_password_with_equals_kept_without_encrypt)
+
+    def test_np2_meta_password_with_equals_conflict():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_file = os.path.join(tmpdir, "test.txt")
+            with open(sample_file, "wb") as f:
+                f.write(b"content")
+
+            nzb_out = os.path.join(tmpdir, "out.nzb")
+            cmd = [
+                ngpost_bin,
+                "--server", f"user:pass@@@127.0.0.1:11999:1:nossl",
+                "-g", "alt.binaries.test",
+                "-o", nzb_out,
+                "-i", sample_file,
+                "-m", "password=a=b",
+                "--encrypt",
+                "--encrypt-password", "a",
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            if res.returncode == 0:
+                raise AssertionError("Expected non-zero exit code on differing -m password containing '='")
+            err = res.stderr.decode("utf-8", errors="replace") + res.stdout.decode("utf-8", errors="replace")
+            if "differs from" not in err:
+                raise AssertionError(f"Expected 'differs from' conflict error message, got: {err}")
+
+    all_passed &= run_test("NP-2: Differing -m password containing '=' rejected", test_np2_meta_password_with_equals_conflict)
+
+    def test_np2_meta_empty_key_ignored():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                sample_file = os.path.join(tmpdir, "test.txt")
+                with open(sample_file, "wb") as f:
+                    f.write(b"content")
+
+                nzb_out = os.path.join(tmpdir, "out.nzb")
+                cmd = [
+                    ngpost_bin,
+                    "-s", "false",
+                    "--server", f"user:pass@@@127.0.0.1:{server.port}:1:nossl",
+                    "-g", "alt.binaries.test",
+                    "-f", "tester@example.com",
+                    "-o", nzb_out,
+                    "-i", sample_file,
+                    "-m", "=x",
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+                if res.returncode != 0:
+                    raise AssertionError(f"Process failed (code {res.returncode}): {res.stderr.decode('utf-8', errors='replace')}")
+                with open(nzb_out, "r", encoding="utf-8") as f:
+                    nzb_content = f.read()
+                if '<meta type="">' in nzb_content:
+                    raise AssertionError(f"-m with empty key produced an empty-key meta: {nzb_content}")
+            finally:
+                server.close()
+
+    all_passed &= run_test("NP-2: -m with empty key (=x) is ignored", test_np2_meta_empty_key_ignored)
 
     # Test 4: NP-2 Conflicting -m yenc_encrypted=false with --encrypt rejected
     def test_np2_conflicting_meta_marker():

@@ -1502,9 +1502,11 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
     {
         for (const QString &meta : parser.values(sOptionNames[Opt::META]))
         {
-            QStringList mList = meta.split("=");
-            if (mList.size() == 2)
-                _meta.insert(escapeXML(mList[0]), escapeXML(mList[1]));
+            // Split at the first '=' only, so values such as "password=a=b" keep their '='.
+            // An empty key (e.g. "=x") is ignored.
+            const int sep = meta.indexOf('=');
+            if (sep > 0)
+                _meta.insert(escapeXML(meta.left(sep)), escapeXML(meta.mid(sep + 1)));
         }
     }
 
@@ -1875,8 +1877,8 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
                 // Explicit reuse decision (NP-1): with --encrypt, the generated
                 // archive password IS the transport password so no password is
                 // lost and only one authoritative password is emitted.
-                if (_encryption.password.isEmpty())
-                    _encryption.password = randomPass(_lengthPass);
+                // The encryption password is already non-empty here: validate()
+                // above rejects --encrypt without a password (DEC-2).
                 _rarPass = _encryption.password;
             }
             else
