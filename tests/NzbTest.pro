@@ -10,3 +10,6 @@ SOURCES += \
 HEADERS += \
     ../src/EncryptionSettings.h \
     ../src/utils/CmdOrGuiApp.h
+
+unix: LIBS += -largon2 -lsodium -lcrypto
+win32: LIBS += -largon2 -lsodium -llibcrypto

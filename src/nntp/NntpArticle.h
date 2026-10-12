@@ -92,13 +92,9 @@ public:
 
     std::string header(const std::string &idSignature) const;
     inline std::string body() const;
-    inline qint64 bodySize() const;
-    //! RFC 3977 §3.1.1: true if any body line starts with 0x2E (terminator exempt)
-    bool articleBodyNeedsDotStuffing() const;
     inline QString id() const;
     inline uint part() const;
     inline quint32 segmentIndex() const;
-    inline bool isEncrypted() const;
     inline NntpFile *nntpFile() const;
 
     inline bool isFirstArticle() const;
@@ -134,12 +130,10 @@ void NntpArticle::freeMemory()
 }
 
 std::string NntpArticle::body() const { return _body ? std::string(_body, static_cast<size_t>(_bodySize)) : std::string(); }
-qint64 NntpArticle::bodySize() const { return _bodySize; }
 
 QString NntpArticle::id() const { return _msgId; }
 uint NntpArticle::part() const{ return _part; }
 quint32 NntpArticle::segmentIndex() const { return _segmentIndex; }
-bool NntpArticle::isEncrypted() const { return _isEncrypted; }
 NntpFile *NntpArticle::nntpFile() const { return _nntpFile; }
 
 bool NntpArticle::isFirstArticle() const { return _part == 1; }

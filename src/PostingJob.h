@@ -20,6 +20,7 @@
 #ifndef POSTINGJOB_H
 #define POSTINGJOB_H
 #include "utils/Macros.h"
+#include "utils/CmdOrGuiApp.h"
 #include "crypto/CryptoEngine.h"
 
 #include <QFileInfoList>
@@ -275,6 +276,96 @@ public:
     inline const QString &nzbFilePath() const;
 
     inline static QString humanSize(double size);
+
+    static bool writeNzbHead(QTextStream &stream, const QString &tab,
+                             const QMap<QString, QString> &meta,
+                             const QString &rarPass,
+                             bool encryptionEnabled,
+                             const QString &encryptionPassword,
+                             QString *error = nullptr)
+    {
+        if (meta.contains(QStringLiteral("yenc_encrypted")))
+        {
+            const QString val = meta.value(QStringLiteral("yenc_encrypted")).toLower();
+            if (encryptionEnabled && val != QStringLiteral("true"))
+            {
+                if (error)
+                    *error = QStringLiteral("Conflicting metadata: -m yenc_encrypted must be 'true' when encryption is enabled");
+                return false;
+            }
+            if (!encryptionEnabled && val == QStringLiteral("true"))
+            {
+                if (error)
+                    *error = QStringLiteral("Conflicting metadata: -m yenc_encrypted cannot be 'true' when encryption is disabled");
+                return false;
+            }
+        }
+
+        if (encryptionEnabled)
+        {
+            if (!rarPass.isEmpty() && rarPass != encryptionPassword)
+            {
+                if (error)
+                    *error = QStringLiteral("Conflicting passwords: archive password conflicts with encryption password");
+                return false;
+            }
+            if (meta.contains(QStringLiteral("password")))
+            {
+                const QString metaPass = meta.value(QStringLiteral("password"));
+                const QString escapedEnc = CmdOrGuiApp::escapeXML(encryptionPassword);
+                if (metaPass != escapedEnc && metaPass != encryptionPassword)
+                {
+                    if (error)
+                        *error = QStringLiteral("Conflicting metadata: -m password conflicts with encryption password");
+                    return false;
+                }
+            }
+        }
+        else
+        {
+            if (!rarPass.isEmpty() && meta.contains(QStringLiteral("password")))
+            {
+                const QString metaPass = meta.value(QStringLiteral("password"));
+                const QString escapedRar = CmdOrGuiApp::escapeXML(rarPass);
+                if (metaPass != escapedRar && metaPass != rarPass)
+                {
+                    if (error)
+                        *error = QStringLiteral("Conflicting metadata: -m password conflicts with archive password");
+                    return false;
+                }
+            }
+        }
+
+        if (encryptionEnabled || !rarPass.isEmpty() || !meta.isEmpty())
+        {
+            stream << tab << "<head>\n";
+            for (auto itMeta = meta.cbegin(); itMeta != meta.cend(); ++itMeta)
+            {
+                if (itMeta.key() == QStringLiteral("password") || itMeta.key() == QStringLiteral("yenc_encrypted"))
+                    continue; // Emitted authoritatively below
+                stream << tab << tab << "<meta type=\"" << itMeta.key() << "\">" << itMeta.value() << "</meta>\n";
+            }
+
+            if (encryptionEnabled)
+            {
+                stream << tab << tab << "<meta type=\"yenc_encrypted\">true</meta>\n"
+                       << tab << tab << "<meta type=\"password\">"
+                       << CmdOrGuiApp::escapeXML(encryptionPassword) << "</meta>\n";
+            }
+            else if (!rarPass.isEmpty())
+            {
+                stream << tab << tab << "<meta type=\"password\">"
+                       << CmdOrGuiApp::escapeXML(rarPass) << "</meta>\n";
+            }
+            else if (meta.contains(QStringLiteral("password")))
+            {
+                stream << tab << tab << "<meta type=\"password\">"
+                       << meta.value(QStringLiteral("password")) << "</meta>\n";
+            }
+            stream << tab << "</head>\n\n";
+        }
+        return true;
+    }
 
 
 #ifdef __COMPUTE_IMMEDIATE_SPEED__

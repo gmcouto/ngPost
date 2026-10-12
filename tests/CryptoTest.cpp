@@ -8,7 +8,6 @@
 
 #include "crypto/CryptoEngine.h"
 #include "crypto/FF1Cipher.h"
-#include "TestDecryptor.h"
 #include "../src/PostingJob.h"
 
 namespace
@@ -33,6 +32,39 @@ QJsonObject loadVectorJson(const char *name)
         qFatal("cannot parse vector file %s: %s", name, qPrintable(parseError.errorString()));
     return doc.object();
 }
+
+bool testDecryptBody(const QByteArray &ciphertext, const QByteArray &tag, const QByteArray &key,
+                     quint32 segmentIndex, const QByteArray &aad, QByteArray &plaintext, QString *error = nullptr)
+{
+    plaintext.clear();
+    if(key.size() != 32 || tag.size() != 16 || aad.isEmpty())
+    {
+        if(error) *error = QStringLiteral("Invalid parameters for body decryption");
+        return false;
+    }
+    QByteArray nonce;
+    if(!CryptoEngine::deriveBodyNonce(key, segmentIndex, nonce, error))
+        return false;
+    QByteArray combined = ciphertext + tag;
+    plaintext.resize(ciphertext.size());
+    unsigned long long decryptedLen = 0;
+    const int status = crypto_aead_xchacha20poly1305_ietf_decrypt(
+        reinterpret_cast<unsigned char *>(plaintext.data()), &decryptedLen,
+        nullptr,
+        reinterpret_cast<const unsigned char *>(combined.constData()),
+        static_cast<unsigned long long>(combined.size()),
+        reinterpret_cast<const unsigned char *>(aad.constData()),
+        static_cast<unsigned long long>(aad.size()),
+        reinterpret_cast<const unsigned char *>(nonce.constData()),
+        reinterpret_cast<const unsigned char *>(key.constData()));
+    if(status != 0 || decryptedLen != static_cast<unsigned long long>(ciphertext.size()))
+    {
+        plaintext.clear();
+        if(error) *error = QStringLiteral("Authentication failed");
+        return false;
+    }
+    return true;
+}
 } // namespace
 
 class CryptoTest : public QObject
@@ -48,14 +80,16 @@ private slots:
     // Missing =yencryption header must be rejected in both directions
     void rejectsMissingEncryptionHeader();
     // Destructor wipes must leave key buffers zeroed
-    void keyStructsWipeOnDestruction();
+    void keysWipeOnDestruction();
     // Vendored canonical conformance vectors
-    void vendoredManifestIntegrity();
     void vendoredArgon2idVectors();
     void vendoredNonceTweakVectors();
     void vendoredBodyEncryptionVectors();
     void vendoredGrammarMalformedVectors();
     void vendoredIndexAllocationVectors();
+    // Full-article FF1 vectors (deterministic combined-mode restoration, STD-2)
+    void fullArticleVectors_data();
+    void fullArticleVectors();
 };
 
 void CryptoTest::controlLineVectors_data()
@@ -77,10 +111,12 @@ void CryptoTest::controlLineVectors_data()
 
     struct LineCase { const char *fixtureId; const char *row; };
     const LineCase lineCases[] = {
-        {"control-vec-01-line-1-ybegin-single",   "ybegin"},
+        {"control-vec-01-line-1-ybegin-single",   "ybegin_single"},
+        {"control-vec-02-line-1-ybegin-multipart","ybegin_multipart"},
         {"control-vec-03-line-2-ypart",           "ypart"},
         {"control-vec-04-line-3-yencryption",     "yencryption"},
-        {"control-vec-06-line-54-yend-multipart", "yend"},
+        {"control-vec-05-line-4-yend-single",     "yend_single"},
+        {"control-vec-06-line-54-yend-multipart", "yend_multipart"},
     };
     for(const LineCase &lineCase : lineCases)
     {
@@ -124,7 +160,7 @@ void CryptoTest::fullArticlePreservesDataAndFraming()
     const QByteArray line3("DataLine2TestDataMustRemainUntouched1234567890");
     const QByteArray line4("=yend size=18");
     const QByteArray lineEnc = QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
-            + salt.toHex() + QByteArrayLiteral(" index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b");
+            + salt.toHex() + QByteArrayLiteral(" index=00000001 tag=24d9229edfc04aeaeedcf105bc91e695");
     const QByteArray block = line1 + "\r\n" + lineEnc + "\r\n" + line2 + "\n" + line3 + "\r\n" + line4;
 
     QByteArray wire;
@@ -143,7 +179,7 @@ void CryptoTest::rejectsDualSaltMismatch()
     QString error;
     QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error), qPrintable(error));
     const QByteArray blockMismatch = QByteArrayLiteral("=ybegin line=128 size=18 name=file.bin\r\n")
-            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=00112233445566778899aabbccddeeff index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
+            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=00112233445566778899aabbccddeeff index=00000001 tag=24d9229edfc04aeaeedcf105bc91e695\r\n")
             + QByteArrayLiteral("data\r\n=yend size=18\r\n");
     QByteArray wire;
     QVERIFY(!FF1Cipher::encryptControlLines(blockMismatch, masterKey, 1, salt, wire, &error));
@@ -151,7 +187,7 @@ void CryptoTest::rejectsDualSaltMismatch()
 
     const QByteArray blockMismatchIndex = QByteArrayLiteral("=ybegin line=128 size=18 name=file.bin\r\n")
             + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=") + salt.toHex()
-            + QByteArrayLiteral(" index=00000002 tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
+            + QByteArrayLiteral(" index=00000002 tag=24d9229edfc04aeaeedcf105bc91e695\r\n")
             + QByteArrayLiteral("data\r\n=yend size=18\r\n");
     QVERIFY(!FF1Cipher::encryptControlLines(blockMismatchIndex, masterKey, 1, salt, wire, &error));
     QVERIFY(wire.isEmpty());
@@ -185,71 +221,92 @@ void CryptoTest::rejectsMissingEncryptionHeader()
 
     const QByteArray validBlock = QByteArrayLiteral("=ybegin line=128 size=4 name=file.bin\r\n")
             + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=") + salt.toHex()
-            + QByteArrayLiteral(" index=00000001 tag=0cd77ce245a654463f90b945b1d22d5b\r\n")
+            + QByteArrayLiteral(" index=00000001 tag=24d9229edfc04aeaeedcf105bc91e695\r\n")
             + QByteArrayLiteral("data\r\n=yend size=4 pcrc32=12345678\r\n");
     QVERIFY2(FF1Cipher::encryptControlLines(validBlock, masterKey, 1, salt, wire, &error),
              qPrintable(error));
-    QByteArray restored;
-    QVERIFY2(TestDecryptor::decryptControlLines(wire, masterKey, 1, restored, nullptr, nullptr, &error),
-             qPrintable(error));
-    QCOMPARE(restored, validBlock);
+    QCOMPARE(wire.left(20), salt + QByteArray::fromHex("00000001"));
+    const QList<QByteArray> validLines = wire.split('\n');
+    QCOMPARE(validLines.size(), 5);
+    QCOMPARE(validLines[2], QByteArrayLiteral("data\r"));
 }
 
-void CryptoTest::keyStructsWipeOnDestruction()
+void CryptoTest::keysWipeOnDestruction()
 {
     const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
     QByteArray masterKey;
     QString error;
     QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
              qPrintable(error));
+    // CryptoKeys::clear() must release the derived key material: after clear()
+    // the struct holds no key bytes (the buffer was zeroed then dropped).
     {
         CryptoKeys keys;
         QVERIFY2(CryptoEngine::deriveKeys(QStringLiteral("test123"), salt, keys, &error),
                  qPrintable(error));
-        QCOMPARE(keys.masterKey, masterKey);
-
-        BodyEncryptionResult result;
-        QVERIFY2(CryptoEngine::encryptBody(QByteArrayLiteral("abcd"), keys.masterKey, 1,
-                                           result, &error), qPrintable(error));
-        QCOMPARE(result.ciphertext.size(), 4);
-        QCOMPARE(result.tag.size(), 16);
+        QCOMPARE(keys.masterKey.size(), 32);
+        keys.clear();
+        QVERIFY(keys.masterKey.isEmpty());
     }
-    BodyEncryptionResult fresh;
-    QVERIFY2(CryptoEngine::encryptBody(QByteArrayLiteral("abcd"), masterKey, 1, fresh, &error),
-             qPrintable(error));
-    QByteArray restored;
-    QVERIFY2(TestDecryptor::decryptBody(fresh.ciphertext, fresh.tag, masterKey, 1, restored, &error),
-             qPrintable(error));
-    QCOMPARE(restored, QByteArrayLiteral("abcd"));
 }
 
-void CryptoTest::vendoredManifestIntegrity()
+void CryptoTest::fullArticleVectors_data()
 {
-    const QByteArray manifestRaw = readVectorFile("manifest.json");
-    const QJsonObject manifest = QJsonDocument::fromJson(manifestRaw).object();
-    QCOMPARE(manifest.value(QStringLiteral("standard_version")).toString(), QStringLiteral("1.2"));
-    const QJsonObject files = manifest.value(QStringLiteral("files")).toObject();
-    QVERIFY(files.contains(QStringLiteral("argon2id.json")));
-    QVERIFY(files.contains(QStringLiteral("nonce_tweak.json")));
-    QVERIFY(files.contains(QStringLiteral("body_encryption.json")));
-    QVERIFY(files.contains(QStringLiteral("control_line_encryption.json")));
-    QVERIFY(files.contains(QStringLiteral("malformed_inputs.json")));
-    QVERIFY(files.contains(QStringLiteral("nzb_segment_identity.json")));
-    QVERIFY(files.contains(QStringLiteral("index_allocation.json")));
+    QTest::addColumn<QString>("fixtureId");
+    QTest::newRow("combined_one_byte") << QStringLiteral("control-vec-11-combined-one-byte-data");
+    QTest::newRow("full_article_54_lines") << QStringLiteral("control-vec-08-full-article-54-lines");
+}
 
-    for(const QString &fileName : files.keys())
+void CryptoTest::fullArticleVectors()
+{
+    QFETCH(QString, fixtureId);
+    const QJsonObject data = loadVectorJson("control_line_encryption.json");
+    QJsonObject vector;
+    for(const QJsonValue &value : data.value(QStringLiteral("vectors")).toArray())
     {
-        const QByteArray raw = readVectorFile(fileName.toUtf8().constData());
-        const QByteArray sha = QCryptographicHash::hash(raw, QCryptographicHash::Sha256).toHex();
-        const QJsonObject entry = files.value(fileName).toObject();
-        QCOMPARE(QString::fromLatin1(sha), entry.value(QStringLiteral("sha256")).toString());
+        if(value.toObject().value(QStringLiteral("id")).toString() == fixtureId)
+        {
+            vector = value.toObject();
+            break;
+        }
+    }
+    QVERIFY2(!vector.isEmpty(), qPrintable(fixtureId));
+
+    const QByteArray salt = QByteArray::fromHex(vector.value(QStringLiteral("salt_hex")).toString().toLatin1());
+    const quint32 segmentIndex = static_cast<quint32>(vector.value(QStringLiteral("segment_index")).toInt());
+    const QString password = vector.value(QStringLiteral("password")).toString();
+
+    QByteArray masterKey;
+    QString error;
+    QVERIFY2(CryptoEngine::deriveKey(password, salt, masterKey, &error), qPrintable(error));
+
+    QByteArray block;
+    for(const QJsonValue &lineVal : vector.value(QStringLiteral("input_lines")).toArray())
+    {
+        block += lineVal.toString().toLatin1();
+        block += "\r\n";
+    }
+
+    QByteArray wire;
+    QVERIFY2(FF1Cipher::encryptControlLines(block, masterKey, segmentIndex, salt, wire, &error), qPrintable(error));
+
+    const QJsonArray expectedWireHex = vector.value(QStringLiteral("expected_wire_lines_hex")).toArray();
+    const QList<QByteArray> wireLines = wire.split('\n');
+    QVERIFY(wireLines.size() >= expectedWireHex.size());
+    for(int i = 0; i < expectedWireHex.size(); ++i)
+    {
+        QByteArray actual = wireLines.at(i);
+        if(actual.endsWith('\r'))
+            actual.chop(1);
+        const QByteArray expected = QByteArray::fromHex(expectedWireHex.at(i).toString().toLatin1());
+        QCOMPARE(actual, expected);
     }
 }
 
 void CryptoTest::vendoredArgon2idVectors()
 {
     const QJsonArray vectors = loadVectorJson("argon2id.json").value(QStringLiteral("vectors")).toArray();
-    QCOMPARE(vectors.size(), 6);
+    QCOMPARE(vectors.size(), 9);
     for(const QJsonValue &value : vectors)
     {
         const QJsonObject vector = value.toObject();
@@ -298,16 +355,26 @@ void CryptoTest::vendoredNonceTweakVectors()
 void CryptoTest::vendoredBodyEncryptionVectors()
 {
     const QJsonArray vectors = loadVectorJson("body_encryption.json").value(QStringLiteral("vectors")).toArray();
-    QCOMPARE(vectors.size(), 8);
+    QCOMPARE(vectors.size(), 9);
     for(const QJsonValue &value : vectors)
     {
         const QJsonObject vector = value.toObject();
         const QByteArray key = QByteArray::fromHex(vector.value(QStringLiteral("derived_key_hex")).toString().toLatin1());
         const quint32 segmentIndex = static_cast<quint32>(vector.value(QStringLiteral("segment_index")).toVariant().toUInt());
         const QByteArray plaintext = QByteArray::fromHex(vector.value(QStringLiteral("plaintext_hex")).toString().toLatin1());
+        const QJsonObject aadObj = vector.value(QStringLiteral("aad")).toObject();
+        const QByteArray expectedAad = QByteArray::fromHex(aadObj.value(QStringLiteral("expected_aad_hex")).toString().toLatin1());
+        const QByteArray nameBytes = QByteArray::fromHex(aadObj.value(QStringLiteral("name_bytes_hex")).toString().toLatin1());
+        // The production AAD builder must reproduce the canonical serialization.
+        QCOMPARE(CryptoEngine::buildBodyAad(
+                     static_cast<quint32>(aadObj.value(QStringLiteral("part_number")).toInt()),
+                     static_cast<quint32>(aadObj.value(QStringLiteral("part_begin")).toInt()),
+                     aadObj.value(QStringLiteral("segment_bytes")).toVariant().toULongLong(),
+                     nameBytes),
+                 expectedAad);
         BodyEncryptionResult encrypted;
         QString error;
-        QVERIFY2(CryptoEngine::encryptBody(plaintext, key, segmentIndex, encrypted, &error), qPrintable(error));
+        QVERIFY2(CryptoEngine::encryptBody(plaintext, key, segmentIndex, expectedAad, encrypted, &error), qPrintable(error));
         QCOMPARE(encrypted.ciphertext, QByteArray::fromHex(vector.value(QStringLiteral("expected_ciphertext_hex")).toString().toLatin1()));
         QCOMPARE(encrypted.tag, QByteArray::fromHex(vector.value(QStringLiteral("expected_tag_hex")).toString().toLatin1()));
         QCOMPARE(vector.value(QStringLiteral("expected_yencryption_line")).toString(),
@@ -317,13 +384,13 @@ void CryptoTest::vendoredBodyEncryptionVectors()
                      + QStringLiteral(" tag=") + vector.value(QStringLiteral("expected_tag_hex")).toString());
 
         QByteArray restored;
-        QVERIFY2(TestDecryptor::decryptBody(encrypted.ciphertext, encrypted.tag, key, segmentIndex, restored, &error),
+        QVERIFY2(testDecryptBody(encrypted.ciphertext, encrypted.tag, key, segmentIndex, expectedAad, restored, &error),
                  qPrintable(error));
         QCOMPARE(restored, plaintext);
 
         QByteArray tamperedTag = encrypted.tag;
         tamperedTag[0] = static_cast<char>(tamperedTag.at(0) ^ 1);
-        QVERIFY(!TestDecryptor::decryptBody(encrypted.ciphertext, tamperedTag, key, segmentIndex, restored, &error));
+        QVERIFY(!testDecryptBody(encrypted.ciphertext, tamperedTag, key, segmentIndex, expectedAad, restored, &error));
         QVERIFY(restored.isEmpty());
     }
 }

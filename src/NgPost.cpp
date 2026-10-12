@@ -786,9 +786,27 @@ void NgPost::_post(const QFileInfo &fileInfo, const QString &monitorFolder)
             _rarName = randomPass(_lengthName);
 
         if (_genPass) // shall we gen password?
-            _rarPass = randomPass(_lengthPass);
+        {
+            if (_encryption.enabled)
+            {
+                if (_encryption.password.isEmpty())
+                    _encryption.password = randomPass(_lengthPass);
+                _rarPass = _encryption.password;
+            }
+            else
+            {
+                _rarPass = randomPass(_lengthPass);
+            }
+        }
         if (!_rarPassFixed.isEmpty()) // rar pass fixed would take other
             _rarPass = _rarPassFixed;
+
+        if (_encryption.enabled && !_rarPass.isEmpty() && _rarPass != _encryption.password)
+        {
+            qCritical() << "Conflicting passwords: RAR_PASS differs from encryption password";
+            return;
+        }
+
         if (!_rarPass.isEmpty())
             _meta.remove("password");
     }
@@ -1478,23 +1496,56 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
         }
     }
 
-    const bool encryptionOptionSet = parser.isSet(sOptionNames[Opt::ENCRYPT])
-            || parser.isSet(sOptionNames[Opt::ENCRYPT_PASSWORD]);
-    if(encryptionOptionSet)
+    if (parser.isSet(sOptionNames[Opt::ENCRYPT]))
+        _encryption.enabled = true;
+
+    if (parser.isSet(sOptionNames[Opt::ENCRYPT_PASSWORD]))
     {
-        if(!parser.isSet(sOptionNames[Opt::ENCRYPT]))
+        if (!_encryption.enabled)
         {
             _error(tr("Error syntax: --encrypt-password requires --encrypt"),
                    ERROR_CODE::ERR_WRONG_ARG);
             return false;
         }
-        _encryption.enabled = true;
-        if(parser.isSet(sOptionNames[Opt::ENCRYPT_PASSWORD]))
-            _encryption.password = parser.value(sOptionNames[Opt::ENCRYPT_PASSWORD]);
+        _encryption.password = parser.value(sOptionNames[Opt::ENCRYPT_PASSWORD]);
+    }
+
+    if (_encryption.enabled)
+    {
         QString encryptionError;
-        if(!_encryption.validate(&encryptionError))
+        if (!_encryption.validate(&encryptionError))
         {
             _error(tr("Error syntax: %1").arg(encryptionError), ERROR_CODE::ERR_WRONG_ARG);
+            return false;
+        }
+
+        if (_meta.contains("password"))
+        {
+            const QString metaPass = _meta.value("password");
+            const QString escapedEnc = escapeXML(_encryption.password);
+            if (metaPass != escapedEnc && metaPass != _encryption.password)
+            {
+                _error(tr("Conflicting metadata: -m password differs from --encrypt-password"),
+                       ERROR_CODE::ERR_WRONG_ARG);
+                return false;
+            }
+        }
+        if (_meta.contains("yenc_encrypted"))
+        {
+            if (_meta.value("yenc_encrypted").toLower() != "true")
+            {
+                _error(tr("Conflicting metadata: -m yenc_encrypted must be 'true' when encryption is enabled"),
+                       ERROR_CODE::ERR_WRONG_ARG);
+                return false;
+            }
+        }
+    }
+    else
+    {
+        if (_meta.contains("yenc_encrypted") && _meta.value("yenc_encrypted").toLower() == "true")
+        {
+            _error(tr("Conflicting metadata: -m yenc_encrypted cannot be 'true' when encryption is disabled"),
+                   ERROR_CODE::ERR_WRONG_ARG);
             return false;
         }
     }
@@ -1808,8 +1859,28 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
 
         if (_genPass)
         {
-            _rarPass = randomPass(_lengthPass);
-            _meta.remove("password");
+            if (_encryption.enabled)
+            {
+                // Explicit reuse decision (NP-1): with --encrypt, the generated
+                // archive password IS the transport password so no password is
+                // lost and only one authoritative password is emitted.
+                if (_encryption.password.isEmpty())
+                    _encryption.password = randomPass(_lengthPass);
+                _rarPass = _encryption.password;
+            }
+            else
+            {
+                _rarPass = randomPass(_lengthPass);
+                _meta.remove("password");
+            }
+        }
+
+        if (!_genPass && _encryption.enabled && !_rarPass.isEmpty()
+                && _rarPass != _encryption.password)
+        {
+            _error(tr("Conflicting passwords: RAR_PASS/--rar_pass differs from --encrypt-password"),
+                   ERROR_CODE::ERR_WRONG_ARG);
+            return false;
         }
     }
 
@@ -2385,14 +2456,6 @@ QString NgPost::_parseConfig(const QString &configPath)
             }
         }
         file.close();
-    }
-
-    QString encryptionError;
-    if(err.isEmpty() && !_encryption.validate(&encryptionError))
-    {
-        err += tr("Invalid encryption configuration: %1\n").arg(encryptionError);
-        _encryption.enabled = false;
-        _encryption.clearPassword();
     }
 
     if (err.isEmpty() && !_postHistoryFile.isEmpty())

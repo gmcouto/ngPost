@@ -6,12 +6,10 @@ INCLUDEPATH += ../src .
 
 SOURCES += \
     CryptoTest.cpp \
-    TestDecryptor.cpp \
     ../src/crypto/CryptoEngine.cpp \
     ../src/crypto/FF1Cipher.cpp
 
 HEADERS += \
-    TestDecryptor.h \
     ../src/crypto/CryptoEngine.h \
     ../src/crypto/FF1Cipher.h
 

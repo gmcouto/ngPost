@@ -226,8 +226,8 @@ QByteArray uint32Be(quint32 value)
     return bytes;
 }
 
-bool ff1Transform(const QByteArray &key, const QByteArray &tweak, const QByteArray &input,
-                  bool decrypt, QByteArray &output, QString *error)
+bool ff1Encrypt(const QByteArray &key, const QByteArray &tweak, const QByteArray &input,
+                QByteArray &output, QString *error)
 {
     output.clear();
     if(key.size() != KeySize)
@@ -244,7 +244,6 @@ bool ff1Transform(const QByteArray &key, const QByteArray &tweak, const QByteArr
     std::vector<uchar> numerals;
     if(!bytesToNumerals(input, numerals, error))
         return false;
-    QByteArray ciphertext;
 
     EvpCipherContext cipher(EVP_CIPHER_CTX_new());
     BnContext bnContext(BN_CTX_new());
@@ -304,11 +303,9 @@ bool ff1Transform(const QByteArray &key, const QByteArray &tweak, const QByteArr
         return false;
     }
 
-    for(int roundOffset = 0; roundOffset < 10; ++roundOffset)
+    for(int round = 0; round < 10; ++round)
     {
-        const int round = decrypt ? 9 - roundOffset : roundOffset;
-        const std::vector<uchar> &roundInput = decrypt ? a : second;
-        if(!numeralsToBignum(roundInput, number.get()))
+        if(!numeralsToBignum(second, number.get()))
         {
             setError(error, QStringLiteral("Unable to encode FF1 numeral string"));
             return false;
@@ -361,15 +358,12 @@ bool ff1Transform(const QByteArray &key, const QByteArray &tweak, const QByteArr
             setError(error, QStringLiteral("Unable to calculate FF1 round modulus"));
             return false;
         }
-        const std::vector<uchar> &operand = decrypt ? second : a;
-        if(!numeralsToBignum(operand, number.get()))
+        if(!numeralsToBignum(a, number.get()))
         {
             setError(error, QStringLiteral("Unable to encode FF1 round operand"));
             return false;
         }
-        const int arithmeticStatus = decrypt ? BN_sub(calculated.get(), number.get(), y.get())
-                                             : BN_add(calculated.get(), number.get(), y.get());
-        if(!arithmeticStatus || !BN_nnmod(calculated.get(), calculated.get(), modulus.get(), bnContext.get()))
+        if(!BN_add(calculated.get(), number.get(), y.get()) || !BN_nnmod(calculated.get(), calculated.get(), modulus.get(), bnContext.get()))
         {
             setError(error, QStringLiteral("FF1 round arithmetic failed"));
             return false;
@@ -380,16 +374,8 @@ bool ff1Transform(const QByteArray &key, const QByteArray &tweak, const QByteArr
             setError(error, QStringLiteral("Unable to decode FF1 round result"));
             return false;
         }
-        if(decrypt)
-        {
-            second = a;
-            a = next;
-        }
-        else
-        {
-            a = second;
-            second = next;
-        }
+        a = second;
+        second = next;
     }
 
     std::vector<uchar> result = a;
@@ -487,11 +473,6 @@ bool parseYencryptionLine(const QByteArray &line, QByteArray &salt, quint32 &seg
         *tag = QByteArray::fromHex(tagHex);
     return true;
 }
-
-bool parseYencryptionLinePublic(const QByteArray &line, QByteArray &salt, quint32 &segmentIndex, QByteArray *tag)
-{
-    return parseYencryptionLine(line, salt, segmentIndex, tag);
-}
 }
 
 bool FF1Cipher::isAlphabetByte(uchar value)
@@ -502,7 +483,7 @@ bool FF1Cipher::isAlphabetByte(uchar value)
 
 bool FF1Cipher::parseYencryptionLine(const QByteArray &line, QByteArray &salt, quint32 &segmentIndex, QByteArray *tag)
 {
-    return parseYencryptionLinePublic(line, salt, segmentIndex, tag);
+    return ::parseYencryptionLine(line, salt, segmentIndex, tag);
 }
 
 bool FF1Cipher::encryptLine(const QByteArray &plaintext, const QByteArray &masterKey, quint32 segmentIndex,
@@ -541,7 +522,7 @@ bool FF1Cipher::encryptLine(const QByteArray &plaintext, const QByteArray &maste
     QByteArray ciphertext;
     if(!CryptoEngine::deriveControlKey(masterKey, controlKey, error)
             || !CryptoEngine::deriveControlTweak(masterKey, segmentIndex, lineIndex, tweak, error)
-            || !ff1Transform(controlKey, tweak, plaintext, false, ciphertext, error))
+            || !ff1Encrypt(controlKey, tweak, plaintext, ciphertext, error))
     {
         if(!controlKey.isEmpty())
             sodium_memzero(controlKey.data(), static_cast<size_t>(controlKey.size()));

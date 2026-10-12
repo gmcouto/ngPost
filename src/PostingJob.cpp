@@ -403,20 +403,12 @@ void PostingJob::_postFiles()
                    << "<!DOCTYPE nzb PUBLIC \"-//newzBin//DTD NZB 1.1//EN\" \"http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd\">\n"
                    << "<nzb xmlns=\"http://www.newzbin.com/DTD/2003/nzb\">\n";
 
-        if (_encryptionEnabled || !_rarPass.isEmpty() || _ngPost->_meta.size())
+        QString nzbHeadError;
+        if (!writeNzbHead(_nzbStream, tab, _ngPost->_meta, _rarPass, _encryptionEnabled, _encryptionPassword, &nzbHeadError))
         {
-            _nzbStream << tab << "<head>\n";
-            for (auto itMeta = _ngPost->_meta.cbegin(); itMeta != _ngPost->_meta.cend() ; ++itMeta)
-                _nzbStream << tab << tab << "<meta type=\"" << itMeta.key() << "\">" << itMeta.value() << "</meta>\n";
-            if (_encryptionEnabled)
-            {
-                _nzbStream << tab << tab << "<meta type=\"yenc_encrypted\">true</meta>\n"
-                           << tab << tab << "<meta type=\"password\">"
-                           << NgPost::escapeXML(_encryptionPassword) << "</meta>\n";
-            }
-            else if (!_rarPass.isEmpty())
-                _nzbStream << tab << tab << "<meta type=\"password\">" << _rarPass << "</meta>\n";
-            _nzbStream << tab << "</head>\n\n";
+            _error(nzbHeadError);
+            emit postingFinished();
+            return;
         }
         _nzbStream << MB_FLUSH;
     }

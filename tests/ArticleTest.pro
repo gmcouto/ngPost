@@ -6,13 +6,11 @@ INCLUDEPATH += ../src .
 
 SOURCES += \
     ArticleTest.cpp \
-    TestDecryptor.cpp \
     ../src/crypto/CryptoEngine.cpp \
     ../src/crypto/FF1Cipher.cpp \
     ../src/utils/Yenc.cpp
 
 HEADERS += \
-    TestDecryptor.h \
     ../src/crypto/CryptoEngine.h \
     ../src/crypto/FF1Cipher.h \
     ../src/utils/PureStaticClass.h \

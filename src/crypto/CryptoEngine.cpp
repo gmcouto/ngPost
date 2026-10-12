@@ -66,6 +66,32 @@ QByteArray CryptoEngine::uint32Be(quint32 value)
     return bytes;
 }
 
+QByteArray CryptoEngine::uint64Be(quint64 value)
+{
+    QByteArray bytes(8, Qt::Uninitialized);
+    for(int index = 7; index >= 0; --index)
+    {
+        bytes[index] = static_cast<char>(value & 0xff);
+        value >>= 8;
+    }
+    return bytes;
+}
+
+// Associated data per yEnc Body Encryption Standard v1.2 Section 2.1 (as amended 2026-10-11):
+// "yenc-body aad" || uint32_be(partNumber) || uint32_be(partBegin)
+// || uint64_be(segmentBytes) || uint32_be(nameLength) || nameBytes.
+QByteArray CryptoEngine::buildBodyAad(quint32 partNumber, quint32 partBegin, quint64 segmentBytes,
+                                      const QByteArray &fileName)
+{
+    QByteArray aad = QByteArrayLiteral("yenc-body aad");
+    aad += uint32Be(partNumber);
+    aad += uint32Be(partBegin);
+    aad += uint64Be(segmentBytes);
+    aad += uint32Be(static_cast<quint32>(fileName.size()));
+    aad += fileName;
+    return aad;
+}
+
 QByteArray CryptoEngine::generateSalt()
 {
     if(sodium_init() < 0)
@@ -158,9 +184,14 @@ bool CryptoEngine::deriveControlTweak(const QByteArray &masterKey, quint32 segme
 }
 
 bool CryptoEngine::encryptBody(const QByteArray &plaintext, const QByteArray &key, quint32 segmentIndex,
-                               BodyEncryptionResult &result, QString *error)
+                               const QByteArray &aad, BodyEncryptionResult &result, QString *error)
 {
     result = BodyEncryptionResult();
+    if(aad.isEmpty())
+    {
+        setError(error, QStringLiteral("AAD must not be empty"));
+        return false;
+    }
     QByteArray nonce;
     if(!initialize(error) || !validateKey(key, "Key", error)
             || !deriveBodyNonce(key, segmentIndex, nonce, error))
@@ -171,7 +202,10 @@ bool CryptoEngine::encryptBody(const QByteArray &plaintext, const QByteArray &ke
     const int status = crypto_aead_xchacha20poly1305_ietf_encrypt(
                 reinterpret_cast<unsigned char *>(sealed.data()), &sealedLength,
                 reinterpret_cast<const unsigned char *>(plaintext.constData()),
-                static_cast<unsigned long long>(plaintext.size()), nullptr, 0, nullptr,
+                static_cast<unsigned long long>(plaintext.size()),
+                reinterpret_cast<const unsigned char *>(aad.constData()),
+                static_cast<unsigned long long>(aad.size()),
+                nullptr,
                 reinterpret_cast<const unsigned char *>(nonce.constData()),
                 reinterpret_cast<const unsigned char *>(key.constData()));
     if(status != 0 || sealedLength != static_cast<unsigned long long>(sealed.size()))

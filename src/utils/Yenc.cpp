@@ -176,9 +176,14 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
             setError(error, QStringLiteral("Invalid encryption context"));
             return false;
         }
+        const quint32 partNum = (totalParts == 1) ? 1 : part;
+        const quint32 partBeg = (totalParts == 1) ? 1 : static_cast<quint32>(filePosition + 1);
+        const quint64 segBytes = (totalParts == 1) ? static_cast<quint64>(fileSize) : static_cast<quint64>(plaintext.size());
+        const QByteArray aad = CryptoEngine::buildBodyAad(partNum, partBeg, segBytes, fileName);
+
         BodyEncryptionResult encrypted;
         if(!CryptoEngine::encryptBody(plaintext, encryption->masterKey, encryption->segmentIndex,
-                                      encrypted, error))
+                                      aad, encrypted, error))
             return false;
         wirePayload = encrypted.ciphertext;
         const QByteArray indexHex = QStringLiteral("%1").arg(encryption->segmentIndex, 8, 16, QLatin1Char('0')).toLatin1();

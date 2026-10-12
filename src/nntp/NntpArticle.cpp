@@ -144,43 +144,43 @@ void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
     // RFC 3977 §3.1.1 dot-stuffing: a body line whose first
     // byte is 0x2E must have that byte doubled before the socket write, or the
     // server strips it — corrupting e.g. the Line 1 bootstrap of encrypted
-    // articles. Applied only to encrypted articles; unencrypted articles are
-    // sent directly. The trailing article terminator ("\r\n.\r\n") is exempt.
-    if(_isEncrypted && _body && _bodySize > 0 && articleBodyNeedsDotStuffing())
+    // articles. Applied to encrypted articles. The trailing article terminator ("\r\n.\r\n") is exempt.
+    if(_isEncrypted && _body && _bodySize > 0)
     {
-        static thread_local QByteArray stuffedBody;
-        stuffedBody.resize(static_cast<int>(_bodySize * 2));
-        qint64 outSize = 0;
+        bool needsStuffing = false;
         bool atLineStart = true;
-        const qint64 terminatorPos = _bodySize - 3; // potential "\r\n.\r\n" suffix
+        const qint64 terminatorPos = _bodySize - 3;
         for(qint64 i = 0; i < _bodySize; ++i)
         {
             const uchar byte = static_cast<uchar>(_body[i]);
             if(atLineStart && byte == 0x2E && i != terminatorPos)
-                stuffedBody[static_cast<int>(outSize++)] = '.';
-            stuffedBody[static_cast<int>(outSize++)] = static_cast<char>(byte);
+            {
+                needsStuffing = true;
+                break;
+            }
             atLineStart = (byte == 0x0A);
         }
-        con->write(stuffedBody.constData(), outSize);
-        stuffedBody.clear();
-        stuffedBody.squeeze();
-    }
-    else
-        con->write(_body, _bodySize);
-}
 
-bool NntpArticle::articleBodyNeedsDotStuffing() const
-{
-    bool atLineStart = true;
-    const qint64 terminatorPos = _bodySize - 3;
-    for(qint64 i = 0; i < _bodySize; ++i)
-    {
-        const uchar byte = static_cast<uchar>(_body[i]);
-        if(atLineStart && byte == 0x2E && i != terminatorPos)
-            return true;
-        atLineStart = (byte == 0x0A);
+        if(needsStuffing)
+        {
+            static thread_local QByteArray stuffedBody;
+            stuffedBody.resize(static_cast<int>(_bodySize * 2));
+            qint64 outSize = 0;
+            atLineStart = true;
+            for(qint64 i = 0; i < _bodySize; ++i)
+            {
+                const uchar byte = static_cast<uchar>(_body[i]);
+                if(atLineStart && byte == 0x2E && i != terminatorPos)
+                    stuffedBody[static_cast<int>(outSize++)] = '.';
+                stuffedBody[static_cast<int>(outSize++)] = static_cast<char>(byte);
+                atLineStart = (byte == 0x0A);
+            }
+            con->write(stuffedBody.constData(), outSize);
+            stuffedBody.clear();
+            return;
+        }
     }
-    return false;
+    con->write(_body, _bodySize);
 }
 
 std::string NntpArticle::header(const std::string &idSignature) const

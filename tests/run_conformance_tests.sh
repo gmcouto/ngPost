@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build and run all ngPost native test suites (CryptoTest, ArticleTest, NzbTest,
-# ConformanceVectors) against vendored fixtures. Builds in a per-user scratch
-# directory (reused across runs) so the source tree stays clean.
+# Build and run all ngPost native test suites (CryptoTest, ArticleTest, NzbTest)
+# and CLI offline NNTP integration tests against vendored fixtures. Builds in a per-user
+# scratch directory (reused across runs) so the source tree stays clean.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,3 +25,13 @@ for suite in "${SUITES[@]}"; do
         "./$suite"
     )
 done
+
+echo "=== Building and running CLI offline integration tests ==="
+CLI_BUILD_DIR="$BUILD_DIR/cli"
+mkdir -p "$CLI_BUILD_DIR"
+(
+    cd "$CLI_BUILD_DIR"
+    qmake "$SCRIPT_DIR/../src/ngPost_cmd.pro"
+    make -j$(nproc 2>/dev/null || echo 2)
+)
+python3 "$SCRIPT_DIR/test_cli_integration.py" --bin "$CLI_BUILD_DIR/ngPost"
