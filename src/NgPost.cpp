@@ -811,6 +811,18 @@ void NgPost::_post(const QFileInfo &fileInfo, const QString &monitorFolder)
             _meta.remove("password");
     }
 
+    // NP-1 round 2: with encryption enabled, never build an unencrypted PostingJob. An empty or
+    // XML-unrepresentable password would otherwise yield _encryptionEnabled == false. Skip this file.
+    if (_encryption.enabled)
+    {
+        QString encryptionError;
+        if (!_encryption.validate(&encryptionError))
+        {
+            _error(tr("Skipping %1: %2").arg(fileInfo.absoluteFilePath(), encryptionError));
+            return;
+        }
+    }
+
     qDebug() << "Start posting job for " << _nzbName
              << " with rar_name: " << _rarName << " and pass: " << _rarPass
              << " (auto delete: " << _delAuto << ")";
@@ -1522,8 +1534,7 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
         if (_meta.contains("password"))
         {
             const QString metaPass = _meta.value("password");
-            const QString escapedEnc = escapeXML(_encryption.password);
-            if (metaPass != escapedEnc && metaPass != _encryption.password)
+            if (!PostingJob::encryptionPasswordMetaMatches(metaPass, _encryption.password))
             {
                 _error(tr("Conflicting metadata: -m password differs from --encrypt-password"),
                        ERROR_CODE::ERR_WRONG_ARG);
@@ -1897,6 +1908,15 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
 
     if (filesToUpload.size())
     { // input files provided with -i
+        if (_encryption.enabled)
+        {
+            QString encryptionError;
+            if (!_encryption.validate(&encryptionError))
+            {
+                _error(tr("Error syntax: %1").arg(encryptionError), ERROR_CODE::ERR_WRONG_ARG);
+                return false;
+            }
+        }
         QString nzbFilePath = nzbPath();
         if (!nzbFilePath.endsWith(".nzb"))
             nzbFilePath += ".nzb";

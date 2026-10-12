@@ -159,6 +159,17 @@ void PostingWidget::postFiles(bool updateMainParams)
         }
         udatePostingParams();
 
+        // NP-1: refuse XML-unrepresentable encryption passwords before any job is created.
+        if (_ngPost->_encryption.enabled)
+        {
+            QString encryptionError;
+            if (!_ngPost->_encryption.validate(&encryptionError))
+            {
+                _hmi->logError(encryptionError);
+                return;
+            }
+        }
+
         // check if the nzb file name already exist
         QString nzbPath = _ngPost->nzbPath();
         if (!nzbPath.endsWith(".nzb"))

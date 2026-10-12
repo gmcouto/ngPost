@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 
 class FakeNntpServer:
     def __init__(self, fail_first_post=False):
@@ -385,6 +386,190 @@ ENCRYPT = true
                 raise AssertionError(f"Expected password error message, got: {err}")
 
     all_passed &= run_test("NP-3: Config ENCRYPT=true without password fails merged validation", test_np3_config_enabled_empty_password_fails)
+
+    # Test 6b: NP-1 (F5) XML 1.0-unrepresentable encryption password refused before posting
+    def test_np1_xml_unrepresentable_password_rejected():
+        secret = "Secret\x01Ctl"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                sample_file = os.path.join(tmpdir, "test.txt")
+                with open(sample_file, "wb") as f:
+                    f.write(b"payload")
+                nzb_out = os.path.join(tmpdir, "out.nzb")
+                cmd = [
+                    ngpost_bin,
+                    "-s", "false",
+                    "--server", f"user:pass@@@127.0.0.1:{server.port}:1:nossl",
+                    "-g", "alt.binaries.test",
+                    "-f", "tester@example.com",
+                    "-o", nzb_out,
+                    "-i", sample_file,
+                    "--encrypt",
+                    "--encrypt-password", secret,
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+                if res.returncode == 0:
+                    raise AssertionError("Expected non-zero exit for XML-unrepresentable encryption password")
+                if os.path.exists(nzb_out):
+                    raise AssertionError("NZB must not be written for a refused password")
+                output = res.stdout.decode("utf-8", errors="replace") + res.stderr.decode("utf-8", errors="replace")
+                if "Secret" in output or "Ctl" in output:
+                    raise AssertionError("Refusal message must not echo the password")
+                if server.received_articles:
+                    raise AssertionError("No article may be posted for a refused password")
+            finally:
+                server.close()
+
+    all_passed &= run_test("NP-1: XML-unrepresentable encryption password refused before posting", test_np1_xml_unrepresentable_password_rejected)
+
+    # Test 6c: NP-1 accepted password with XML-special characters and an emoji
+    def test_np1_xml_special_and_emoji_password_accepted():
+        password = "Pa&<>\"'\U0001F600ss"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                sample_file = os.path.join(tmpdir, "test.txt")
+                with open(sample_file, "wb") as f:
+                    f.write(b"Emoji password payload")
+                nzb_out = os.path.join(tmpdir, "out.nzb")
+                cmd = [
+                    ngpost_bin,
+                    "-s", "false",
+                    "--server", f"user:pass@@@127.0.0.1:{server.port}:1:nossl",
+                    "-g", "alt.binaries.test",
+                    "-f", "tester@example.com",
+                    "-o", nzb_out,
+                    "-i", sample_file,
+                    "--encrypt",
+                    "--encrypt-password", password,
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                if res.returncode != 0:
+                    raise AssertionError(f"Process failed: {res.stderr.decode('utf-8', errors='replace')}")
+                with open(nzb_out, "r", encoding="utf-8") as f:
+                    nzb_content = f.read()
+                expected = '<meta type="password">Pa&amp;&lt;&gt;&quot;&apos;\U0001F600ss</meta>'
+                if expected not in nzb_content:
+                    raise AssertionError(f"Password meta not XML-escaped as expected: {nzb_content}")
+            finally:
+                server.close()
+
+    all_passed &= run_test("NP-1: XML-special and emoji encryption password accepted and escaped", test_np1_xml_special_and_emoji_password_accepted)
+
+    # NP-1 round 3: a CR password given via -m password= and --encrypt-password must not report a conflict,
+    # because the -m value and the encryption password are compared in their CR-escaped XML form.
+    def test_np1_cr_password_meta_no_conflict():
+        password = "x\ry"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                sample_file = os.path.join(tmpdir, "test.txt")
+                with open(sample_file, "wb") as f:
+                    f.write(b"CR password payload")
+                nzb_out = os.path.join(tmpdir, "out.nzb")
+                cmd = [
+                    ngpost_bin,
+                    "-s", "false",
+                    "--server", f"user:pass@@@127.0.0.1:{server.port}:1:nossl",
+                    "-g", "alt.binaries.test",
+                    "-f", "tester@example.com",
+                    "-o", nzb_out,
+                    "-i", sample_file,
+                    "-m", f"password={password}",
+                    "--encrypt",
+                    "--encrypt-password", password,
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                err = res.stderr.decode("utf-8", errors="replace") + res.stdout.decode("utf-8", errors="replace")
+                if res.returncode != 0:
+                    raise AssertionError(f"Process failed: {err}")
+                if "conflict" in err.lower():
+                    raise AssertionError(f"CR password reported a false conflict: {err}")
+                with open(nzb_out, "r", encoding="utf-8") as f:
+                    nzb_content = f.read()
+                if '<meta type="password">x&#xD;y</meta>' not in nzb_content:
+                    raise AssertionError("CR password meta not written as &#xD;")
+            finally:
+                server.close()
+
+    all_passed &= run_test("NP-1: CR encryption password with matching -m password has no false conflict", test_np1_cr_password_meta_no_conflict)
+
+    # NP-1 round 4: a password with both an XML special and a CR is stored in -m as escapeXML(raw), which keeps the
+    # raw CR. It must still match --encrypt-password, and the emitted password meta must parse back to the original.
+    def test_np1_xml_special_and_cr_password_meta_no_conflict():
+        password = "a&<\rb"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                sample_file = os.path.join(tmpdir, "test.txt")
+                with open(sample_file, "wb") as f:
+                    f.write(b"XML special and CR password payload")
+                nzb_out = os.path.join(tmpdir, "out.nzb")
+                cmd = [
+                    ngpost_bin,
+                    "-s", "false",
+                    "--server", f"user:pass@@@127.0.0.1:{server.port}:1:nossl",
+                    "-g", "alt.binaries.test",
+                    "-f", "tester@example.com",
+                    "-o", nzb_out,
+                    "-i", sample_file,
+                    "-m", f"password={password}",
+                    "--encrypt",
+                    "--encrypt-password", password,
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                err = res.stderr.decode("utf-8", errors="replace") + res.stdout.decode("utf-8", errors="replace")
+                if res.returncode != 0:
+                    raise AssertionError(f"Process failed: {err}")
+                if "conflict" in err.lower():
+                    raise AssertionError(f"XML special and CR password reported a false conflict: {err}")
+                root = ET.parse(nzb_out).getroot()
+                metas = [m for m in root.iter() if m.tag.endswith("meta") and m.get("type") == "password"]
+                if len(metas) != 1:
+                    raise AssertionError(f"Expected exactly one password meta, found {len(metas)}")
+                if metas[0].text != password:
+                    raise AssertionError(f"Password meta did not parse back to the original password: {metas[0].text!r}")
+            finally:
+                server.close()
+
+    all_passed &= run_test("NP-1: XML special and CR encryption password with matching -m password has no false conflict", test_np1_xml_special_and_cr_password_meta_no_conflict)
+
+    # NP-1 round 5: -m values are stored as escapeXML(raw). A raw -m value that merely equals the raw encryption
+    # password is a different stored value and must conflict. Here -m "&amp;amp;" is stored as "&amp;amp;amp;",
+    # which equals the raw encryption password "&amp;amp;amp;" but not escapeXML of it.
+    def test_np1_meta_raw_equals_encrypt_password_conflicts():
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                sample_file = os.path.join(tmpdir, "test.txt")
+                with open(sample_file, "wb") as f:
+                    f.write(b"raw-equal conflict payload")
+                nzb_out = os.path.join(tmpdir, "out.nzb")
+                cmd = [
+                    ngpost_bin,
+                    "-s", "false",
+                    "--server", f"user:pass@@@127.0.0.1:{server.port}:1:nossl",
+                    "-g", "alt.binaries.test",
+                    "-f", "tester@example.com",
+                    "-o", nzb_out,
+                    "-i", sample_file,
+                    "-m", "password=&amp;amp;",
+                    "--encrypt",
+                    "--encrypt-password", "&amp;amp;amp;",
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                err = res.stderr.decode("utf-8", errors="replace") + res.stdout.decode("utf-8", errors="replace")
+                if res.returncode == 0:
+                    raise AssertionError("Expected non-zero exit code: -m value differs from --encrypt-password")
+                if "Conflicting metadata" not in err:
+                    raise AssertionError(f"Expected 'Conflicting metadata' in output, got: {err}")
+                if server.received_articles:
+                    raise AssertionError("Conflicting metadata must not post any article")
+            finally:
+                server.close()
+
+    all_passed &= run_test("NP-2: -m password equal to raw encryption password (not its escaped form) is rejected", test_np1_meta_raw_equals_encrypt_password_conflicts)
 
     # Test 8: NP-4 Byte-stable retries
     def test_np4_byte_stable_retries():

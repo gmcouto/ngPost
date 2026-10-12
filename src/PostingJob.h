@@ -22,6 +22,7 @@
 #include "utils/Macros.h"
 #include "utils/CmdOrGuiApp.h"
 #include "crypto/CryptoEngine.h"
+#include "EncryptionSettings.h"
 
 #include <QFileInfoList>
 #include <QVector>
@@ -277,6 +278,22 @@ public:
 
     inline static QString humanSize(double size);
 
+    // Encryption password as written in <meta type="password"> (Body Std Section 4). XML 1.0 parsers
+    // normalize a raw CR to LF in element content, so each CR is written as &#xD; to round-trip exactly.
+    // Only the encryption password uses this; archive passwords and other metas use plain escapeXML.
+    static QString escapeEncryptionPasswordXml(const QString &password)
+    {
+        return CmdOrGuiApp::escapeXML(password).replace(QLatin1Char('\r'), QStringLiteral("&#xD;"));
+    }
+
+    // Conflict rule for a "password" meta value against the encryption password. Meta values are stored as
+    // escapeXML(raw) (NgPost::parseCommandLine), and escapeXML keeps CR, so that exact form is the only match.
+    // Any other form (raw, or CR-escaped as &#xD;) is a different value and must conflict. Used at both sites.
+    static bool encryptionPasswordMetaMatches(const QString &metaPass, const QString &password)
+    {
+        return metaPass == CmdOrGuiApp::escapeXML(password);
+    }
+
     static bool writeNzbHead(QTextStream &stream, const QString &tab,
                              const QMap<QString, QString> &meta,
                              const QString &rarPass,
@@ -309,11 +326,18 @@ public:
                     *error = QStringLiteral("Conflicting passwords: archive password conflicts with encryption password");
                 return false;
             }
+            // NP-1 (Body Std Section 4): the NZB route cannot carry XML-unrepresentable passwords.
+            // The error must not echo the password.
+            if (!EncryptionSettings::isXmlRepresentable(encryptionPassword))
+            {
+                if (error)
+                    *error = QStringLiteral("Encryption password contains characters that cannot be represented in XML 1.0 (control characters or unpaired surrogates); choose another password");
+                return false;
+            }
             if (meta.contains(QStringLiteral("password")))
             {
                 const QString metaPass = meta.value(QStringLiteral("password"));
-                const QString escapedEnc = CmdOrGuiApp::escapeXML(encryptionPassword);
-                if (metaPass != escapedEnc && metaPass != encryptionPassword)
+                if (!encryptionPasswordMetaMatches(metaPass, encryptionPassword))
                 {
                     if (error)
                         *error = QStringLiteral("Conflicting metadata: -m password conflicts with encryption password");
@@ -350,7 +374,7 @@ public:
             {
                 stream << tab << tab << "<meta type=\"yenc_encrypted\">true</meta>\n"
                        << tab << tab << "<meta type=\"password\">"
-                       << CmdOrGuiApp::escapeXML(encryptionPassword) << "</meta>\n";
+                       << escapeEncryptionPasswordXml(encryptionPassword) << "</meta>\n";
             }
             else if (!rarPass.isEmpty())
             {

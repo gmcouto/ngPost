@@ -251,6 +251,14 @@ bool PostingJob::_ensureEncryptionKeys()
 void PostingJob::onStartPosting(bool isActiveJob)
 {
     _isActiveJob = isActiveJob;
+    // NP-1 round 2: refuse before the Argon2id derivation (64 MiB) and before any compression.
+    // The message must not echo the password.
+    if(_encryptionEnabled && !EncryptionSettings::isXmlRepresentable(_encryptionPassword))
+    {
+        _error(QStringLiteral("Encryption password contains characters that cannot be represented in XML 1.0 (control characters or unpaired surrogates); choose another password"));
+        emit postingFinished();
+        return;
+    }
     if(_encryptionEnabled && !_ensureEncryptionKeys())
     {
         _error(_encryptionError);
