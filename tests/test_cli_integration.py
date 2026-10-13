@@ -279,7 +279,7 @@ def main():
 
     all_passed &= run_test("Conflicting -m password rejected", test_conflicting_meta_password_rejected)
 
-    # (F2): only the first '=' separates key and value in -m, so a value with '=' is kept.
+    # Only the first '=' separates key and value in -m, so a value with '=' is kept.
     def test_meta_password_with_equals_matches_encrypt_password():
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
