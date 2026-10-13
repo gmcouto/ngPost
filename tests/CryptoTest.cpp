@@ -87,7 +87,7 @@ private slots:
     void vendoredBodyEncryptionVectors();
     void vendoredGrammarMalformedVectors();
     void vendoredIndexAllocationVectors();
-    // Full-article FF1 vectors (deterministic combined-mode restoration, STD-2)
+    // Full-article FF1 vectors (deterministic combined-mode restoration)
     void fullArticleVectors_data();
     void fullArticleVectors();
 };
