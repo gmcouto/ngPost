@@ -255,7 +255,7 @@ void CryptoTest::fullArticleVectors_data()
     QTest::addColumn<QString>("fixtureId");
     QTest::newRow("combined_one_byte") << QStringLiteral("control-vec-11-combined-one-byte-data");
     QTest::newRow("full_article_54_lines") << QStringLiteral("control-vec-08-full-article-54-lines");
-    // NP-2 (F8): single-part article whose name= contains " part=" must keep single-part layout (Control Std Section 9)
+    // single-part article whose name= contains " part=" must keep single-part layout (Control Std Section 9)
     QTest::newRow("single_part_name_contains_part") << QStringLiteral("control-vec-12-single-part-name-contains-part");
 }
 

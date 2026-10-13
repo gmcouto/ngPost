@@ -290,14 +290,6 @@ public:
         return CmdOrGuiApp::escapeXML(password).replace(QLatin1Char('\r'), QStringLiteral("&#xD;"));
     }
 
-    // Conflict rule for a "password" meta value against the encryption password. Meta values are stored as
-    // escapeXML(raw) (NgPost::parseCommandLine), and escapeXML keeps CR, so that exact form is the only match.
-    // Any other form (raw, or CR-escaped as &#xD;) is a different value and must conflict. Used at both sites.
-    static bool encryptionPasswordMetaMatches(const QString &metaPass, const QString &password)
-    {
-        return metaPass == CmdOrGuiApp::escapeXML(password);
-    }
-
     static bool writeNzbHead(QTextStream &stream, const QString &tab,
                              const QMap<QString, QString> &meta,
                              const QString &rarPass,
@@ -312,16 +304,6 @@ public:
             settings.password = encryptionPassword;
             if (!settings.validate(error, meta))
                 return false;
-            if (meta.contains(QStringLiteral("password")))
-            {
-                const QString metaPass = meta.value(QStringLiteral("password"));
-                if (!encryptionPasswordMetaMatches(metaPass, encryptionPassword))
-                {
-                    if (error)
-                        *error = QStringLiteral("Conflicting metadata: -m password conflicts with encryption password");
-                    return false;
-                }
-            }
 
             stream << tab << "<head>\n";
             for (auto itMeta = meta.cbegin(); itMeta != meta.cend(); ++itMeta)

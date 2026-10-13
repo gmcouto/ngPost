@@ -1513,17 +1513,6 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
             _error(tr("Error syntax: %1").arg(encryptionError), ERROR_CODE::ERR_WRONG_ARG);
             return false;
         }
-
-        if (_meta.contains("password"))
-        {
-            const QString metaPass = _meta.value("password");
-            if (!PostingJob::encryptionPasswordMetaMatches(metaPass, _encryption.password))
-            {
-                _error(tr("Conflicting metadata: -m password differs from --encrypt-password"),
-                       ERROR_CODE::ERR_WRONG_ARG);
-                return false;
-            }
-        }
     }
 
     if (parser.isSet(sOptionNames[Opt::GROUPS]))
@@ -1852,15 +1841,6 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
 
     if (filesToUpload.size())
     { // input files provided with -i
-        if (_encryption.enabled)
-        {
-            QString encryptionError;
-            if (!_encryption.validate(&encryptionError, _meta))
-            {
-                _error(tr("Error syntax: %1").arg(encryptionError), ERROR_CODE::ERR_WRONG_ARG);
-                return false;
-            }
-        }
         QString nzbFilePath = nzbPath();
         if (!nzbFilePath.endsWith(".nzb"))
             nzbFilePath += ".nzb";

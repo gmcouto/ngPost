@@ -4,6 +4,8 @@
 #include <QString>
 #include <QMap>
 
+#include "utils/CmdOrGuiApp.h"
+
 struct EncryptionSettings
 {
     bool enabled = false;
@@ -69,6 +71,15 @@ struct EncryptionSettings
         {
             if(error)
                 *error = QStringLiteral("Conflicting metadata: -m yenc_encrypted must be 'true' when encryption is enabled");
+            return false;
+        }
+        // Meta values are stored as escapeXML(raw) (NgPost::parseCommandLine), so that exact form is the only match.
+        // Any other form (raw, or CR-escaped as &#xD;) is a different value and must conflict.
+        if(enabled && meta.contains(QStringLiteral("password"))
+                && meta.value(QStringLiteral("password")) != CmdOrGuiApp::escapeXML(password))
+        {
+            if(error)
+                *error = QStringLiteral("Conflicting metadata: -m password differs from --encrypt-password");
             return false;
         }
         return true;

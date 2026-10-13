@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-CLI offline NNTP integration test suite for ngPost (NP-1..4).
+CLI offline NNTP integration test suite for ngPost.
 Spins up a local fake NNTP server and executes the real ngPost CLI binary
 to verify:
-  1. NP-1: Explicit/generated archive vs transport passwords before compression/posting.
+  1. Explicit/generated archive vs transport passwords before compression/posting.
      --compress --gen_pass --encrypt generates an independent archive password.
      A distinct explicit archive password is accepted; the NZB carries the transport password.
-  2. NP-2: Conflicting reserved -m metadata (password, yenc_encrypted) rejected.
+  2. Conflicting reserved -m metadata (password, yenc_encrypted) rejected.
      Exactly one authoritative transport password/marker emitted in NZB.
      XML escaping preserved.
-  3. NP-3: Merged config + CLI settings: accept CLI password when config enables encryption.
+  3. Merged config + CLI settings: accept CLI password when config enables encryption.
      Reject empty password with config-enabled encryption.
   4. Byte-stable retries: retried articles have 100% byte-identical wire content.
   5. Socket-level leading-dot bootstrap/footer dot-stuffing.
@@ -146,8 +146,8 @@ def main():
     print(f"Using ngPost CLI binary: {ngpost_bin}")
     all_passed = True
 
-    # Test 1: NP-1 --compress --gen_pass --encrypt
-    def test_np1_gen_pass_encrypt():
+    # Test 1: --compress --gen_pass --encrypt
+    def test_gen_pass_encrypt_keeps_transport_metadata():
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
             try:
@@ -192,9 +192,9 @@ def main():
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-1: --compress --gen_pass --encrypt keeps transport metadata", test_np1_gen_pass_encrypt)
+    all_passed &= run_test("--compress --gen_pass --encrypt keeps transport metadata", test_gen_pass_encrypt_keeps_transport_metadata)
 
-    def test_np3_gen_pass_encrypt_without_password():
+    def test_gen_pass_encrypt_without_password_fails():
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = os.path.join(tmpdir, "test.txt")
             with open(sample_file, "wb") as f:
@@ -220,7 +220,7 @@ def main():
             if "non-empty password" not in err:
                 raise AssertionError(f"Expected 'non-empty password' error, got: {err}")
 
-    all_passed &= run_test("NP-3: --compress --gen_pass --encrypt without password fails", test_np3_gen_pass_encrypt_without_password)
+    all_passed &= run_test("--compress --gen_pass --encrypt without password fails", test_gen_pass_encrypt_without_password_fails)
 
     # Independent archive and transport passwords are accepted (decision C-5).
     def test_independent_archive_password():
@@ -252,8 +252,8 @@ def main():
 
     all_passed &= run_test("Independent archive and encryption passwords accepted", test_independent_archive_password)
 
-    # Test 3: NP-2 Conflicting -m password rejected
-    def test_np2_conflicting_meta_password():
+    # Test 3: Conflicting -m password rejected
+    def test_conflicting_meta_password_rejected():
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = os.path.join(tmpdir, "test.txt")
             with open(sample_file, "wb") as f:
@@ -277,10 +277,10 @@ def main():
             if "differs from" not in err and "conflict" not in err.lower():
                 raise AssertionError(f"Expected conflict error message, got: {err}")
 
-    all_passed &= run_test("NP-2: Conflicting -m password rejected", test_np2_conflicting_meta_password)
+    all_passed &= run_test("Conflicting -m password rejected", test_conflicting_meta_password_rejected)
 
-    # NP-2 (F2): only the first '=' separates key and value in -m, so a value with '=' is kept.
-    def test_np2_meta_password_with_equals_matching():
+    # (F2): only the first '=' separates key and value in -m, so a value with '=' is kept.
+    def test_meta_password_with_equals_matches_encrypt_password():
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
             try:
@@ -314,9 +314,9 @@ def main():
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-2: -m password containing '=' matches --encrypt-password without conflict", test_np2_meta_password_with_equals_matching)
+    all_passed &= run_test("-m password containing '=' matches --encrypt-password without conflict", test_meta_password_with_equals_matches_encrypt_password)
 
-    def test_np2_meta_password_with_equals_kept_without_encrypt():
+    def test_meta_password_with_equals_kept_without_encrypt():
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
             try:
@@ -345,9 +345,9 @@ def main():
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-2: -m password containing '=' is kept in NZB without --encrypt", test_np2_meta_password_with_equals_kept_without_encrypt)
+    all_passed &= run_test("-m password containing '=' is kept in NZB without --encrypt", test_meta_password_with_equals_kept_without_encrypt)
 
-    def test_np2_meta_password_with_equals_conflict():
+    def test_meta_password_with_equals_conflict_rejected():
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = os.path.join(tmpdir, "test.txt")
             with open(sample_file, "wb") as f:
@@ -371,9 +371,9 @@ def main():
             if "differs from" not in err:
                 raise AssertionError(f"Expected 'differs from' conflict error message, got: {err}")
 
-    all_passed &= run_test("NP-2: Differing -m password containing '=' rejected", test_np2_meta_password_with_equals_conflict)
+    all_passed &= run_test("Differing -m password containing '=' rejected", test_meta_password_with_equals_conflict_rejected)
 
-    def test_np2_meta_empty_key_ignored():
+    def test_meta_empty_key_ignored():
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
             try:
@@ -402,10 +402,10 @@ def main():
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-2: -m with empty key (=x) is ignored", test_np2_meta_empty_key_ignored)
+    all_passed &= run_test("-m with empty key (=x) is ignored", test_meta_empty_key_ignored)
 
-    # Test 4: NP-2 Conflicting -m yenc_encrypted=false with --encrypt rejected
-    def test_np2_conflicting_meta_marker():
+    # Test 4: Conflicting -m yenc_encrypted=false with --encrypt rejected
+    def test_conflicting_meta_marker_rejected():
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = os.path.join(tmpdir, "test.txt")
             with open(sample_file, "wb") as f:
@@ -426,10 +426,10 @@ def main():
             if res.returncode == 0:
                 raise AssertionError("Expected non-zero exit code on conflicting -m yenc_encrypted=false")
 
-    all_passed &= run_test("NP-2: Conflicting -m yenc_encrypted=false rejected", test_np2_conflicting_meta_marker)
+    all_passed &= run_test("Conflicting -m yenc_encrypted=false rejected", test_conflicting_meta_marker_rejected)
 
-    # Test 5: NP-2 Authoritative emission and XML escaping
-    def test_np2_xml_escaping_and_deduplication():
+    # Test 5: Authoritative emission and XML escaping
+    def test_xml_escaping_and_single_password_emission():
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
             try:
@@ -466,10 +466,10 @@ def main():
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-2: XML escaping and single authoritative password emission", test_np2_xml_escaping_and_deduplication)
+    all_passed &= run_test("XML escaping and single authoritative password emission", test_xml_escaping_and_single_password_emission)
 
-    # Test 6: NP-3 Config enabled encryption accepts CLI password
-    def test_np3_config_enabled_encryption_cli_password():
+    # Test 6: Config enabled encryption accepts CLI password
+    def test_config_encrypt_accepts_cli_password():
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
             try:
@@ -514,10 +514,10 @@ ENCRYPT = true
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-3: Config ENCRYPT=true accepts CLI --encrypt-password", test_np3_config_enabled_encryption_cli_password)
+    all_passed &= run_test("Config ENCRYPT=true accepts CLI --encrypt-password", test_config_encrypt_accepts_cli_password)
 
-    # Test 7: NP-3 Config ENCRYPT=true without password fails merged validation
-    def test_np3_config_enabled_empty_password_fails():
+    # Test 7: Config ENCRYPT=true without password fails merged validation
+    def test_config_encrypt_empty_password_fails():
         with tempfile.TemporaryDirectory() as tmpdir:
             conf_file = os.path.join(tmpdir, "ngPost.conf")
             with open(conf_file, "w") as f:
@@ -540,10 +540,10 @@ ENCRYPT = true
             if "non-empty password" not in err and "password" not in err.lower():
                 raise AssertionError(f"Expected password error message, got: {err}")
 
-    all_passed &= run_test("NP-3: Config ENCRYPT=true without password fails merged validation", test_np3_config_enabled_empty_password_fails)
+    all_passed &= run_test("Config ENCRYPT=true without password fails merged validation", test_config_encrypt_empty_password_fails)
 
-    # Test 6b: NP-1 (F5) XML 1.0-unrepresentable encryption password refused before posting
-    def test_np1_xml_unrepresentable_password_rejected():
+    # Test 6b: XML 1.0-unrepresentable encryption password refused before posting
+    def test_xml_unrepresentable_password_rejected():
         secret = "Secret\x01Ctl"
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
@@ -576,10 +576,10 @@ ENCRYPT = true
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-1: XML-unrepresentable encryption password refused before posting", test_np1_xml_unrepresentable_password_rejected)
+    all_passed &= run_test("XML-unrepresentable encryption password refused before posting", test_xml_unrepresentable_password_rejected)
 
-    # Test 6c: NP-1 accepted password with XML-special characters and an emoji
-    def test_np1_xml_special_and_emoji_password_accepted():
+    # Test 6c: accepted password with XML-special characters and an emoji
+    def test_xml_special_and_emoji_password_accepted():
         password = "Pa&<>\"'\U0001F600ss"
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
@@ -610,11 +610,11 @@ ENCRYPT = true
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-1: XML-special and emoji encryption password accepted and escaped", test_np1_xml_special_and_emoji_password_accepted)
+    all_passed &= run_test("XML-special and emoji encryption password accepted and escaped", test_xml_special_and_emoji_password_accepted)
 
-    # NP-1 round 3: a CR password given via -m password= and --encrypt-password must not report a conflict,
+    # a CR password given via -m password= and --encrypt-password must not report a conflict,
     # because the -m value and the encryption password are compared in their CR-escaped XML form.
-    def test_np1_cr_password_meta_no_conflict():
+    def test_cr_password_meta_no_conflict():
         password = "x\ry"
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
@@ -648,11 +648,11 @@ ENCRYPT = true
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-1: CR encryption password with matching -m password has no false conflict", test_np1_cr_password_meta_no_conflict)
+    all_passed &= run_test("CR encryption password with matching -m password has no false conflict", test_cr_password_meta_no_conflict)
 
-    # NP-1 round 4: a password with both an XML special and a CR is stored in -m as escapeXML(raw), which keeps the
+    # a password with both an XML special and a CR is stored in -m as escapeXML(raw), which keeps the
     # raw CR. It must still match --encrypt-password, and the emitted password meta must parse back to the original.
-    def test_np1_xml_special_and_cr_password_meta_no_conflict():
+    def test_xml_special_and_cr_password_meta_no_conflict():
         password = "a&<\rb"
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
@@ -688,12 +688,12 @@ ENCRYPT = true
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-1: XML special and CR encryption password with matching -m password has no false conflict", test_np1_xml_special_and_cr_password_meta_no_conflict)
+    all_passed &= run_test("XML special and CR encryption password with matching -m password has no false conflict", test_xml_special_and_cr_password_meta_no_conflict)
 
-    # NP-1 round 5: -m values are stored as escapeXML(raw). A raw -m value that merely equals the raw encryption
+    # -m values are stored as escapeXML(raw). A raw -m value that merely equals the raw encryption
     # password is a different stored value and must conflict. Here -m "&amp;amp;" is stored as "&amp;amp;amp;",
     # which equals the raw encryption password "&amp;amp;amp;" but not escapeXML of it.
-    def test_np1_meta_raw_equals_encrypt_password_conflicts():
+    def test_meta_raw_equals_encrypt_password_conflicts():
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
             try:
@@ -724,10 +724,10 @@ ENCRYPT = true
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-2: -m password equal to raw encryption password (not its escaped form) is rejected", test_np1_meta_raw_equals_encrypt_password_conflicts)
+    all_passed &= run_test("-m password equal to raw encryption password (not its escaped form) is rejected", test_meta_raw_equals_encrypt_password_conflicts)
 
-    # Test 8: NP-4 Byte-stable retries
-    def test_np4_byte_stable_retries():
+    # Test 8: Byte-stable retries
+    def test_byte_stable_retries():
         with tempfile.TemporaryDirectory() as tmpdir:
             # Server configured to fail the first POST attempt with 441
             server = FakeNntpServer(fail_first_post=True)
@@ -778,10 +778,10 @@ ENCRYPT = true
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-4: Byte-stable retries upon provider failure", test_np4_byte_stable_retries)
+    all_passed &= run_test("Byte-stable retries upon provider failure", test_byte_stable_retries)
 
-    # Test 9: NP-4 Socket-level dot-stuffing verification
-    def test_np4_socket_dot_stuffing():
+    # Test 9: Socket-level dot-stuffing verification
+    def test_socket_dot_stuffing():
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
             try:
@@ -837,7 +837,7 @@ ENCRYPT = true
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-4: Socket-level article transmission and framing", test_np4_socket_dot_stuffing)
+    all_passed &= run_test("Socket-level article transmission and framing", test_socket_dot_stuffing)
 
     if not all_passed:
         print("\nSome CLI integration tests FAILED!")

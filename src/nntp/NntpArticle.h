@@ -47,7 +47,6 @@ private:
     NntpFile  *_nntpFile; //!< original file
     const uint _part;     //!< part of the original file
     const quint32 _segmentIndex;
-    bool _isEncrypted;
     QUuid      _id;       //!< to generate a unique Message-ID for the Header
 
     const std::string *_from;    //!< NNTP header From (owned by PostingJob)

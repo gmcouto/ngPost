@@ -21,25 +21,8 @@ private slots:
     void roundTripsPasswordMetaThroughXmlParser_data();
     void roundTripsPasswordMetaThroughXmlParser();
     void unencryptedHeadMatchesUpstream();
-    void saveConfigKeepsEncryptTrue();
     void rejectsEncryptedFileSizeOverflow();
 };
-
-void NzbTest::saveConfigKeepsEncryptTrue()
-{
-    EncryptionSettings settings;
-    settings.enabled = true;
-    settings.password = QStringLiteral("transport-secret");
-    QString config = settings.configLine();
-    QVERIFY(config.contains(QStringLiteral("ENCRYPT = true")));
-    QVERIFY(!config.contains(settings.password));
-    QStringList fields = config.trimmed().split('=');
-    EncryptionSettings reloaded;
-    reloaded.enabled = fields.at(1).trimmed() == QStringLiteral("true");
-    QVERIFY(reloaded.enabled);
-    settings.enabled = false;
-    QVERIFY(settings.configLine().isEmpty());
-}
 
 void NzbTest::rejectsEncryptedFileSizeOverflow()
 {

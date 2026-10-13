@@ -31,7 +31,6 @@ ushort NntpArticle::sNbMaxTrySending = 5;
 NntpArticle::NntpArticle(NntpFile *file, uint part, qint64 pos, qint64 bytes,
                          const std::string *from, bool obfuscation, quint32 segmentIndex):
     _nntpFile(file), _part(part), _segmentIndex(segmentIndex),
-    _isEncrypted(segmentIndex != 0),
     _id(QUuid::createUuid()),
     _from(from),
     _subject(nullptr),
@@ -65,9 +64,6 @@ bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encry
         return false;
     }
 
-    if(encryption)
-        _isEncrypted = true;
-
     QByteArray block;
     quint32 crc32 = 0;
     if(!Yenc::encodeArticle(QByteArray(data, static_cast<int>(_fileBytes)), _part,
@@ -76,10 +72,6 @@ bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encry
                             block, crc32, error))
         return false;
     block += QByteArrayLiteral(".\r\n");
-    // Release any previously allocated body before re-allocating so
-    // repeated yEncBody invocations never leak the earlier buffer.
-    delete[] _body;
-    _body = nullptr;
     _bodySize = block.size();
     _body = new char[block.size() + 1];
     std::memcpy(_body, block.constData(), static_cast<size_t>(block.size()));
@@ -145,7 +137,7 @@ void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
     // byte is 0x2E must have that byte doubled before the socket write, or the
     // server strips it — corrupting e.g. the Line 1 bootstrap of encrypted
     // articles. Applied to encrypted articles. The trailing article terminator ("\r\n.\r\n") is exempt.
-    if(_isEncrypted && _body && _bodySize > 0)
+    if(_segmentIndex != 0 && _body && _bodySize > 0)
     {
         bool needsStuffing = false;
         bool atLineStart = true;
@@ -163,7 +155,7 @@ void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
 
         if(needsStuffing)
         {
-            static thread_local QByteArray stuffedBody;
+            QByteArray stuffedBody;
             stuffedBody.resize(static_cast<int>(_bodySize * 2));
             qint64 outSize = 0;
             atLineStart = true;
@@ -176,7 +168,6 @@ void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
                 atLineStart = (byte == 0x0A);
             }
             con->write(stuffedBody.constData(), outSize);
-            stuffedBody.clear();
             return;
         }
     }
