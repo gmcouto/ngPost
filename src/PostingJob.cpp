@@ -244,18 +244,21 @@ bool PostingJob::_ensureEncryptionKeys()
     QString error;
     if(_encryptionSalt.size() == 16 && CryptoEngine::deriveKeys(_encryptionPassword, _encryptionSalt, _encryptionKeys, &error))
         return true;
-    _encryptionError = QStringLiteral("Unable to initialize upload encryption");
+    _encryptionError = QStringLiteral("Unable to initialize upload encryption: %1").arg(
+                error.isEmpty() ? QStringLiteral("Salt must be exactly 16 bytes") : error);
     return false;
 }
 
 void PostingJob::onStartPosting(bool isActiveJob)
 {
     _isActiveJob = isActiveJob;
-    // NP-1 round 2: refuse before the Argon2id derivation (64 MiB) and before any compression.
-    // The message must not echo the password.
-    if(_encryptionEnabled && !EncryptionSettings::isXmlRepresentable(_encryptionPassword))
+    EncryptionSettings settings;
+    settings.enabled = _encryptionEnabled;
+    settings.password = _encryptionPassword;
+    QString validationError;
+    if(!settings.validate(&validationError, _ngPost->_meta))
     {
-        _error(QStringLiteral("Encryption password contains characters that cannot be represented in XML 1.0 (control characters or unpaired surrogates); choose another password"));
+        _error(validationError);
         emit postingFinished();
         return;
     }
@@ -382,6 +385,25 @@ void PostingJob::_postFiles()
         }
         emit archiveFileNames(archiveNames);
     }
+    // Body Encryption Standard v1.2 §2.1: reject the whole plan before posting.
+    if (_encryptionEnabled)
+    {
+        for (const QFileInfo &file : _files)
+        {
+            qint64 fileSize = file.size();
+#ifdef NGPOST_TESTING_HOOKS
+            if (testFileSize >= 0)
+                fileSize = testFileSize;
+#endif
+            if (!EncryptionSettings::acceptsFileSize(fileSize))
+            {
+                _error(QStringLiteral("Encrypted file size must be less than 2^32 bytes"));
+                emit postingFinished();
+                return;
+            }
+        }
+    }
+
     _initPosting();
 
     if (_nbThreads > QThread::idealThreadCount())

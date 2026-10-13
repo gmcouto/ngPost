@@ -71,10 +71,10 @@ public:
     static bool encryptBody(const QByteArray &plaintext, const QByteArray &key, quint32 segmentIndex,
                             const QByteArray &aad, BodyEncryptionResult &result, QString *error = nullptr);
 
+private:
     static QByteArray uint32Be(quint32 value);
     static QByteArray uint64Be(quint64 value);
 
-private:
     static bool initialize(QString *error);
     static bool validateKey(const QByteArray &key, const char *name, QString *error);
 };

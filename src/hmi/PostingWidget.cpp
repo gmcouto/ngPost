@@ -159,11 +159,11 @@ void PostingWidget::postFiles(bool updateMainParams)
         }
         udatePostingParams();
 
-        // NP-1: refuse XML-unrepresentable encryption passwords before any job is created.
+        // Validate transport settings before creating a posting job.
         if (_ngPost->_encryption.enabled)
         {
             QString encryptionError;
-            if (!_ngPost->_encryption.validate(&encryptionError))
+            if (!_ngPost->_encryption.validate(&encryptionError, _ngPost->_meta))
             {
                 _hmi->logError(encryptionError);
                 return;
@@ -188,7 +188,6 @@ void PostingWidget::postFiles(bool updateMainParams)
 
         _postingFinished = false;
         _state = STATE::POSTING;
-
         _postingJob = new PostingJob(_ngPost, nzbPath, files, this,
                                      _ngPost->getPostingGroups(),
                                      _ngPost->from(),
@@ -199,7 +198,6 @@ void PostingWidget::postFiles(bool updateMainParams)
                                      _ngPost->_rarName, _ngPost->_rarPass,
                                      _ngPost->_keepRar, false, true, nullptr,
                                      _ngPost->_encryption.enabled ? _ngPost->_encryption.password : QString());
-
 
         bool hasStarted = _ngPost->startPostingJob(_postingJob);
 

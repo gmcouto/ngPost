@@ -210,6 +210,10 @@ private:
 #endif
 
 public:
+#ifdef NGPOST_TESTING_HOOKS
+    friend class ConfigTest;
+    qint64 testFileSize = -1;
+#endif
     PostingJob(NgPost *ngPost,
                const QString &nzbFilePath,
                const QFileInfoList &files,
@@ -278,9 +282,9 @@ public:
 
     inline static QString humanSize(double size);
 
-    // Encryption password as written in <meta type="password"> (Body Std Section 4). XML 1.0 parsers
-    // normalize a raw CR to LF in element content, so each CR is written as &#xD; to round-trip exactly.
-    // Only the encryption password uses this; archive passwords and other metas use plain escapeXML.
+    // Body Encryption Standard v1.2 §4: raw CR (0x0D) is XML 1.0 content, but an XML parser normalizes a raw CR to LF (0x0A) on parse,
+    // which would silently corrupt the encryption password on decryption. When writing the transport
+    // password into the NZB meta, encode every CR as the numeric character reference &#xD;.
     static QString escapeEncryptionPasswordXml(const QString &password)
     {
         return CmdOrGuiApp::escapeXML(password).replace(QLatin1Char('\r'), QStringLiteral("&#xD;"));
@@ -301,39 +305,13 @@ public:
                              const QString &encryptionPassword,
                              QString *error = nullptr)
     {
-        if (meta.contains(QStringLiteral("yenc_encrypted")))
-        {
-            const QString val = meta.value(QStringLiteral("yenc_encrypted")).toLower();
-            if (encryptionEnabled && val != QStringLiteral("true"))
-            {
-                if (error)
-                    *error = QStringLiteral("Conflicting metadata: -m yenc_encrypted must be 'true' when encryption is enabled");
-                return false;
-            }
-            if (!encryptionEnabled && val == QStringLiteral("true"))
-            {
-                if (error)
-                    *error = QStringLiteral("Conflicting metadata: -m yenc_encrypted cannot be 'true' when encryption is disabled");
-                return false;
-            }
-        }
-
         if (encryptionEnabled)
         {
-            if (!rarPass.isEmpty() && rarPass != encryptionPassword)
-            {
-                if (error)
-                    *error = QStringLiteral("Conflicting passwords: archive password conflicts with encryption password");
+            EncryptionSettings settings;
+            settings.enabled = true;
+            settings.password = encryptionPassword;
+            if (!settings.validate(error, meta))
                 return false;
-            }
-            // NP-1 (Body Std Section 4): the NZB route cannot carry XML-unrepresentable passwords.
-            // The error must not echo the password.
-            if (!EncryptionSettings::isXmlRepresentable(encryptionPassword))
-            {
-                if (error)
-                    *error = QStringLiteral("Encryption password contains characters that cannot be represented in XML 1.0 (control characters or unpaired surrogates); choose another password");
-                return false;
-            }
             if (meta.contains(QStringLiteral("password")))
             {
                 const QString metaPass = meta.value(QStringLiteral("password"));
@@ -344,24 +322,7 @@ public:
                     return false;
                 }
             }
-        }
-        else
-        {
-            if (!rarPass.isEmpty() && meta.contains(QStringLiteral("password")))
-            {
-                const QString metaPass = meta.value(QStringLiteral("password"));
-                const QString escapedRar = CmdOrGuiApp::escapeXML(rarPass);
-                if (metaPass != escapedRar && metaPass != rarPass)
-                {
-                    if (error)
-                        *error = QStringLiteral("Conflicting metadata: -m password conflicts with archive password");
-                    return false;
-                }
-            }
-        }
 
-        if (encryptionEnabled || !rarPass.isEmpty() || !meta.isEmpty())
-        {
             stream << tab << "<head>\n";
             for (auto itMeta = meta.cbegin(); itMeta != meta.cend(); ++itMeta)
             {
@@ -370,22 +331,21 @@ public:
                 stream << tab << tab << "<meta type=\"" << itMeta.key() << "\">" << itMeta.value() << "</meta>\n";
             }
 
-            if (encryptionEnabled)
-            {
-                stream << tab << tab << "<meta type=\"yenc_encrypted\">true</meta>\n"
-                       << tab << tab << "<meta type=\"password\">"
-                       << escapeEncryptionPasswordXml(encryptionPassword) << "</meta>\n";
-            }
-            else if (!rarPass.isEmpty())
-            {
-                stream << tab << tab << "<meta type=\"password\">"
-                       << CmdOrGuiApp::escapeXML(rarPass) << "</meta>\n";
-            }
-            else if (meta.contains(QStringLiteral("password")))
-            {
-                stream << tab << tab << "<meta type=\"password\">"
-                       << meta.value(QStringLiteral("password")) << "</meta>\n";
-            }
+            stream << tab << tab << "<meta type=\"yenc_encrypted\">true</meta>\n"
+                   << tab << tab << "<meta type=\"password\">"
+                   << escapeEncryptionPasswordXml(encryptionPassword) << "</meta>\n";
+            stream << tab << "</head>\n\n";
+            return true;
+        }
+
+        // Upstream unencrypted head writer (byte-for-byte identical to 97a84347f1)
+        if (!rarPass.isEmpty() || !meta.isEmpty())
+        {
+            stream << tab << "<head>\n";
+            for (auto itMeta = meta.cbegin(); itMeta != meta.cend(); ++itMeta)
+                stream << tab << tab << "<meta type=\"" << itMeta.key() << "\">" << itMeta.value() << "</meta>\n";
+            if (!rarPass.isEmpty())
+                stream << tab << tab << "<meta type=\"password\">" << rarPass << "</meta>\n";
             stream << tab << "</head>\n\n";
         }
         return true;

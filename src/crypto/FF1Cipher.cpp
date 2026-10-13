@@ -3,6 +3,7 @@
 #include "CryptoEngine.h"
 
 #include <QDebug>
+#include <QtEndian>
 
 #include <openssl/bn.h>
 #include <openssl/evp.h>
@@ -216,16 +217,6 @@ bool cbcMac(EVP_CIPHER_CTX *context, const QByteArray &data, QByteArray &result)
     return true;
 }
 
-QByteArray uint32Be(quint32 value)
-{
-    QByteArray bytes(4, Qt::Uninitialized);
-    bytes[0] = static_cast<char>((value >> 24) & 0xff);
-    bytes[1] = static_cast<char>((value >> 16) & 0xff);
-    bytes[2] = static_cast<char>((value >> 8) & 0xff);
-    bytes[3] = static_cast<char>(value & 0xff);
-    return bytes;
-}
-
 bool ff1Encrypt(const QByteArray &key, const QByteArray &tweak, const QByteArray &input,
                 QByteArray &output, QString *error)
 {
@@ -283,8 +274,8 @@ bool ff1Encrypt(const QByteArray &key, const QByteArray &tweak, const QByteArray
     p[5] = static_cast<char>(Radix & 0xff);
     p[6] = 10;
     p[7] = static_cast<char>(u & 0xff);
-    p.replace(8, 4, uint32Be(static_cast<quint32>(n)));
-    p.replace(12, 4, uint32Be(static_cast<quint32>(tweak.size())));
+    qToBigEndian<quint32>(static_cast<quint32>(n), p.data() + 8);
+    qToBigEndian<quint32>(static_cast<quint32>(tweak.size()), p.data() + 12);
 
     const int padding = (16 - ((tweak.size() + b + 1) % 16)) % 16;
     const QByteArray qPrefix = tweak + QByteArray(padding, '\0');
@@ -332,7 +323,7 @@ bool ff1Encrypt(const QByteArray &key, const QByteArray &tweak, const QByteArray
             unsigned char block[16];
             unsigned char encrypted[16];
             QByteArray indexBytes(16, '\0');
-            indexBytes.replace(12, 4, uint32Be(blockIndex));
+            qToBigEndian<quint32>(blockIndex, indexBytes.data() + 12);
             for(int index = 0; index < 16; ++index)
                 block[index] = static_cast<uchar>(r[index]) ^ static_cast<uchar>(indexBytes[index]);
             if(!aesBlock(cipher.get(), block, encrypted))
@@ -530,7 +521,13 @@ bool FF1Cipher::encryptLine(const QByteArray &plaintext, const QByteArray &maste
             sodium_memzero(tweak.data(), static_cast<size_t>(tweak.size()));
         return false;
     }
-    wire = lineIndex == 1 ? salt + uint32Be(segmentIndex) + ciphertext : ciphertext;
+    wire = ciphertext;
+    if(lineIndex == 1)
+    {
+        QByteArray indexBytes(4, Qt::Uninitialized);
+        qToBigEndian<quint32>(segmentIndex, indexBytes.data());
+        wire.prepend(salt + indexBytes);
+    }
     sodium_memzero(controlKey.data(), static_cast<size_t>(controlKey.size()));
     sodium_memzero(tweak.data(), static_cast<size_t>(tweak.size()));
     return true;

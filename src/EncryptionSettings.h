@@ -2,6 +2,7 @@
 #define ENCRYPTIONSETTINGS_H
 
 #include <QString>
+#include <QMap>
 
 struct EncryptionSettings
 {
@@ -36,7 +37,19 @@ struct EncryptionSettings
         return true;
     }
 
-    bool validate(QString *error = nullptr) const
+    // Saving preserves the opt-in switch; credentials are supplied separately.
+    QString configLine() const
+    {
+        return enabled ? QStringLiteral("ENCRYPT = true\n") : QString();
+    }
+
+    // Body Encryption Standard v1.2 §2.1: checked before any posting.
+    static bool acceptsFileSize(qint64 size)
+    {
+        return size >= 0 && size < (qint64(1) << 32);
+    }
+
+    bool validate(QString *error = nullptr, const QMap<QString, QString> &meta = {}) const
     {
         if(enabled && password.isEmpty())
         {
@@ -49,6 +62,13 @@ struct EncryptionSettings
         {
             if(error)
                 *error = QStringLiteral("Encryption password contains characters that cannot be represented in XML 1.0 (control characters or unpaired surrogates); choose another password");
+            return false;
+        }
+        if(enabled && meta.contains(QStringLiteral("yenc_encrypted"))
+                && meta.value(QStringLiteral("yenc_encrypted")).toLower() != QStringLiteral("true"))
+        {
+            if(error)
+                *error = QStringLiteral("Conflicting metadata: -m yenc_encrypted must be 'true' when encryption is enabled");
             return false;
         }
         return true;

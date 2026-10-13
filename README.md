@@ -181,7 +181,7 @@ ENCRYPT = true
 ENCRYPT-PASSWORD = yourPassword
 ```
 
-*Note:* For security, the desktop GUI does not write passwords into saved configuration files. Set `ENCRYPT-PASSWORD` manually in your configuration file.
+*Note:* Saving in the desktop GUI preserves `ENCRYPT = true` when enabled. The GUI omits encryption settings when disabled and does not write passwords. Set `ENCRYPT-PASSWORD` manually after saving.
 
 ### Configuration file and keywords that are only in config
 The default configuration file for Linux and Mac environment is: **~/.ngPost** (no conf extension)<br/>

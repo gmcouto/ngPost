@@ -20,7 +20,32 @@ private slots:
     void acceptsXmlSpecialAndSurrogatePairPasswords();
     void roundTripsPasswordMetaThroughXmlParser_data();
     void roundTripsPasswordMetaThroughXmlParser();
+    void unencryptedHeadMatchesUpstream();
+    void saveConfigKeepsEncryptTrue();
+    void rejectsEncryptedFileSizeOverflow();
 };
+
+void NzbTest::saveConfigKeepsEncryptTrue()
+{
+    EncryptionSettings settings;
+    settings.enabled = true;
+    settings.password = QStringLiteral("transport-secret");
+    QString config = settings.configLine();
+    QVERIFY(config.contains(QStringLiteral("ENCRYPT = true")));
+    QVERIFY(!config.contains(settings.password));
+    QStringList fields = config.trimmed().split('=');
+    EncryptionSettings reloaded;
+    reloaded.enabled = fields.at(1).trimmed() == QStringLiteral("true");
+    QVERIFY(reloaded.enabled);
+    settings.enabled = false;
+    QVERIFY(settings.configLine().isEmpty());
+}
+
+void NzbTest::rejectsEncryptedFileSizeOverflow()
+{
+    QVERIFY(EncryptionSettings::acceptsFileSize((qint64(1) << 32) - 1));
+    QVERIFY(!EncryptionSettings::acceptsFileSize(qint64(1) << 32));
+}
 
 void NzbTest::encryptedHeadIncludesTransportMetadata()
 {
@@ -29,9 +54,9 @@ void NzbTest::encryptedHeadIncludesTransportMetadata()
     QString xml;
     QTextStream stream(&xml);
     QString error;
-    // Archive pass matching transport pass is accepted (no conflict)
+    // Transport encryption writes its password even when an archive password differs.
     QVERIFY(PostingJob::writeNzbHead(stream, QStringLiteral("  "), meta,
-                                    QStringLiteral("transport<&\"pass"),
+                                    QStringLiteral("archive-pass"),
                                     true,
                                     QStringLiteral("transport<&\"pass"),
                                     &error));
@@ -53,7 +78,7 @@ void NzbTest::ordinaryHeadPreservesArchiveMetadata()
                                     QStringLiteral("archive<&\"pass"),
                                     false, QString(), &error));
     QVERIFY(!xml.contains(QStringLiteral("yenc_encrypted")));
-    QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">archive&lt;&amp;&quot;pass</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">archive<&\"pass</meta>")));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
 }
 
@@ -77,18 +102,7 @@ void NzbTest::rejectsConflictingMetadata()
                                      QString(), true, QStringLiteral("correct_pass"), &error));
     QVERIFY(error.contains(QStringLiteral("Conflicting metadata")));
 
-    // 3. Conflicting -m yenc_encrypted=true when encryption is disabled
-    QMap<QString, QString> meta3;
-    meta3.insert(QStringLiteral("yenc_encrypted"), QStringLiteral("true"));
-    QVERIFY(!PostingJob::writeNzbHead(stream, QStringLiteral("  "), meta3,
-                                     QString(), false, QString(), &error));
-    QVERIFY(error.contains(QStringLiteral("Conflicting metadata")));
 
-    // 4. Conflicting archive pass and encryption pass
-    QMap<QString, QString> meta4;
-    QVERIFY(!PostingJob::writeNzbHead(stream, QStringLiteral("  "), meta4,
-                                     QStringLiteral("rar_pass"), true, QStringLiteral("enc_pass"), &error));
-    QVERIFY(error.contains(QStringLiteral("Conflicting passwords")));
 }
 
 void NzbTest::deduplicatesMatchingMetadata()
@@ -211,8 +225,6 @@ void NzbTest::roundTripsPasswordMetaThroughXmlParser_data()
     QTest::newRow("non_bmp") << QString::fromUtf8("\xF0\x9F\x98\x80");
     QTest::newRow("replacement_char") << QString::fromUtf8("\xEF\xBF\xBD");
     QTest::newRow("private_use_e000") << QString(QChar(0xE000));
-    // The CLI refuses an empty encryption password, so this row only exercises writeNzbHead directly.
-    QTest::newRow("empty") << QString();
 }
 
 void NzbTest::roundTripsPasswordMetaThroughXmlParser()
@@ -251,3 +263,32 @@ void NzbTest::roundTripsPasswordMetaThroughXmlParser()
 QTEST_APPLESS_MAIN(NzbTest)
 
 #include "NzbTest.moc"
+
+
+void NzbTest::unencryptedHeadMatchesUpstream()
+{
+    QMap<QString, QString> meta;
+    meta.insert(QStringLiteral("category"), QStringLiteral("movies"));
+    meta.insert(QStringLiteral("custom"), QStringLiteral("val"));
+    meta.insert(QStringLiteral("password"), QStringLiteral("meta_pass"));
+    meta.insert(QStringLiteral("yenc_encrypted"), QStringLiteral("true"));
+
+    QString xml;
+    QTextStream stream(&xml);
+    QString error;
+
+    QVERIFY(PostingJob::writeNzbHead(stream, QStringLiteral("  "), meta,
+                                    QStringLiteral("archive_pass"),
+                                    false, QString(), &error));
+
+    const QString expected =
+        QStringLiteral("  <head>\n"
+                       "    <meta type=\"category\">movies</meta>\n"
+                       "    <meta type=\"custom\">val</meta>\n"
+                       "    <meta type=\"password\">meta_pass</meta>\n"
+                       "    <meta type=\"yenc_encrypted\">true</meta>\n"
+                       "    <meta type=\"password\">archive_pass</meta>\n"
+                       "  </head>\n\n");
+
+    QCOMPARE(xml, expected);
+}

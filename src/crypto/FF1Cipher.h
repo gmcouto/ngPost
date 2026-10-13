@@ -13,7 +13,7 @@ public:
     static bool encryptControlLines(const QByteArray &block, const QByteArray &masterKey, quint32 segmentIndex,
                                     const QByteArray &salt, QByteArray &wire, QString *error = nullptr);
     static bool isAlphabetByte(uchar value);
-    //! Strict canonical =yencryption grammar check (exactly 128 bytes, single-SP tokens)
+    // Test seam for the production parser: verifies canonical grammar without encrypting a block.
     static bool parseYencryptionLine(const QByteArray &line, QByteArray &salt, quint32 &segmentIndex, QByteArray *tag = nullptr);
 };
 

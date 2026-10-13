@@ -786,37 +786,18 @@ void NgPost::_post(const QFileInfo &fileInfo, const QString &monitorFolder)
             _rarName = randomPass(_lengthName);
 
         if (_genPass) // shall we gen password?
-        {
-            if (_encryption.enabled)
-            {
-                if (_encryption.password.isEmpty())
-                    _encryption.password = randomPass(_lengthPass);
-                _rarPass = _encryption.password;
-            }
-            else
-            {
-                _rarPass = randomPass(_lengthPass);
-            }
-        }
+            _rarPass = randomPass(_lengthPass);
         if (!_rarPassFixed.isEmpty()) // rar pass fixed would take other
             _rarPass = _rarPassFixed;
-
-        if (_encryption.enabled && !_rarPass.isEmpty() && _rarPass != _encryption.password)
-        {
-            qCritical() << "Conflicting passwords: RAR_PASS differs from encryption password";
-            return;
-        }
-
         if (!_rarPass.isEmpty())
             _meta.remove("password");
     }
 
-    // NP-1 round 2: with encryption enabled, never build an unencrypted PostingJob. An empty or
-    // XML-unrepresentable password would otherwise yield _encryptionEnabled == false. Skip this file.
+    // Validate transport settings before creating a posting job.
     if (_encryption.enabled)
     {
         QString encryptionError;
-        if (!_encryption.validate(&encryptionError))
+        if (!_encryption.validate(&encryptionError, _meta))
         {
             _error(tr("Skipping %1: %2").arg(fileInfo.absoluteFilePath(), encryptionError));
             return;
@@ -1527,7 +1508,7 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
     if (_encryption.enabled)
     {
         QString encryptionError;
-        if (!_encryption.validate(&encryptionError))
+        if (!_encryption.validate(&encryptionError, _meta))
         {
             _error(tr("Error syntax: %1").arg(encryptionError), ERROR_CODE::ERR_WRONG_ARG);
             return false;
@@ -1543,26 +1524,7 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
                 return false;
             }
         }
-        if (_meta.contains("yenc_encrypted"))
-        {
-            if (_meta.value("yenc_encrypted").toLower() != "true")
-            {
-                _error(tr("Conflicting metadata: -m yenc_encrypted must be 'true' when encryption is enabled"),
-                       ERROR_CODE::ERR_WRONG_ARG);
-                return false;
-            }
-        }
     }
-    else
-    {
-        if (_meta.contains("yenc_encrypted") && _meta.value("yenc_encrypted").toLower() == "true")
-        {
-            _error(tr("Conflicting metadata: -m yenc_encrypted cannot be 'true' when encryption is disabled"),
-                   ERROR_CODE::ERR_WRONG_ARG);
-            return false;
-        }
-    }
-
 
     if (parser.isSet(sOptionNames[Opt::GROUPS]))
         updateGroups(parser.value(sOptionNames[Opt::GROUPS]));
@@ -1872,28 +1834,8 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
 
         if (_genPass)
         {
-            if (_encryption.enabled)
-            {
-                // Explicit reuse decision (NP-1): with --encrypt, the generated
-                // archive password IS the transport password so no password is
-                // lost and only one authoritative password is emitted.
-                // The encryption password is already non-empty here: validate()
-                // above rejects --encrypt without a password (DEC-2).
-                _rarPass = _encryption.password;
-            }
-            else
-            {
-                _rarPass = randomPass(_lengthPass);
-                _meta.remove("password");
-            }
-        }
-
-        if (!_genPass && _encryption.enabled && !_rarPass.isEmpty()
-                && _rarPass != _encryption.password)
-        {
-            _error(tr("Conflicting passwords: RAR_PASS/--rar_pass differs from --encrypt-password"),
-                   ERROR_CODE::ERR_WRONG_ARG);
-            return false;
+            _rarPass = randomPass(_lengthPass);
+            _meta.remove("password");
         }
     }
 
@@ -1913,7 +1855,7 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
         if (_encryption.enabled)
         {
             QString encryptionError;
-            if (!_encryption.validate(&encryptionError))
+            if (!_encryption.validate(&encryptionError, _meta))
             {
                 _error(tr("Error syntax: %1").arg(encryptionError), ERROR_CODE::ERR_WRONG_ARG);
                 return false;
@@ -2645,7 +2587,7 @@ void NgPost::_showVersionASCII() const
           << MB_FLUSH;
 }
 
-void NgPost::saveConfig()
+void NgPost::saveConfig(const QString &configPath)
 {
 #if defined(WIN32) || defined(__MINGW64__)
     QString conf = sDefaultConfig;
@@ -2653,6 +2595,8 @@ void NgPost::saveConfig()
     QString conf = QString("%1/%2").arg(getenv("HOME")).arg(sDefaultConfig);
 #endif
 
+    if (!configPath.isEmpty())
+        conf = configPath;
     QFile file(conf);
     if (file.open(QIODevice::WriteOnly|QIODevice::Text))
     {
@@ -2777,8 +2721,7 @@ void NgPost::saveConfig()
                << "\n"
                << tr("## yEnc transport encryption always protects both bodies and control lines") << "\n"
                << tr("## Set ENCRYPT-PASSWORD separately after saving; passwords are never written by the GUI") << "\n"
-               << "#ENCRYPT = true\n"
-               << "#ENCRYPT-PASSWORD = yourPassword\n"
+               << _encryption.configLine()
                << "\n"
                << tr("## remove accents and special characters from the nzb file names") << "\n"
                << (_removeAccentsOnNzbFileName  ? "" : "#") << "NZB_RM_ACCENTS = true\n"

@@ -4,8 +4,8 @@ CLI offline NNTP integration test suite for ngPost (NP-1..4).
 Spins up a local fake NNTP server and executes the real ngPost CLI binary
 to verify:
   1. NP-1: Explicit/generated archive vs transport passwords before compression/posting.
-     --compress --gen_pass --encrypt reuses transport password with no silent loss.
-     Conflicting explicit archive password is rejected before posting.
+     --compress --gen_pass --encrypt generates an independent archive password.
+     A distinct explicit archive password is accepted; the NZB carries the transport password.
   2. NP-2: Conflicting reserved -m metadata (password, yenc_encrypted) rejected.
      Exactly one authoritative transport password/marker emitted in NZB.
      XML escaping preserved.
@@ -192,7 +192,7 @@ def main():
             finally:
                 server.close()
 
-    all_passed &= run_test("NP-1: --compress --gen_pass --encrypt reuses transport pass", test_np1_gen_pass_encrypt)
+    all_passed &= run_test("NP-1: --compress --gen_pass --encrypt keeps transport metadata", test_np1_gen_pass_encrypt)
 
     def test_np3_gen_pass_encrypt_without_password():
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -222,33 +222,35 @@ def main():
 
     all_passed &= run_test("NP-3: --compress --gen_pass --encrypt without password fails", test_np3_gen_pass_encrypt_without_password)
 
-    # Test 2: NP-1 Conflict: explicit --rar_pass differs from --encrypt-password
-    def test_np1_conflicting_archive_pass():
+    # Independent archive and transport passwords are accepted (decision C-5).
+    def test_independent_archive_password():
         with tempfile.TemporaryDirectory() as tmpdir:
-            sample_file = os.path.join(tmpdir, "test.txt")
-            with open(sample_file, "wb") as f:
-                f.write(b"content")
+            server = FakeNntpServer()
+            try:
+                sample_file = os.path.join(tmpdir, "test.txt")
+                with open(sample_file, "wb") as f:
+                    f.write(b"content")
+                nzb_out = os.path.join(tmpdir, "out.nzb")
+                cmd = [
+                    ngpost_bin, "-s", "false",
+                    "--server", f"user:pass@@@127.0.0.1:{server.port}:1:nossl",
+                    "-g", "alt.binaries.test", "-f", "tester@example.com",
+                    "-o", nzb_out, "-i", sample_file,
+                    "--compress", "--rar_pass", "RarPassDifferent",
+                    "--encrypt", "--encrypt-password", "EncryptPass",
+                    "--tmp_dir", tmpdir, "--rar_path", "/bin/true",
+                ]
+                res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+                if res.returncode != 0:
+                    raise AssertionError(f"Process failed: {res.stderr.decode('utf-8', errors='replace')}")
+                with open(nzb_out, encoding="utf-8") as f:
+                    content = f.read()
+                if content.count('type="password"') != 1 or '<meta type="password">EncryptPass</meta>' not in content:
+                    raise AssertionError("Expected exactly one transport password in NZB")
+            finally:
+                server.close()
 
-            nzb_out = os.path.join(tmpdir, "out.nzb")
-            cmd = [
-                ngpost_bin,
-                "--server", f"user:pass@@@127.0.0.1:11999:1:nossl",
-                "-g", "alt.binaries.test",
-                "-o", nzb_out,
-                "-i", sample_file,
-                "--compress",
-                "--rar_pass", "RarPassDifferent",
-                "--encrypt",
-                "--encrypt-password", "EncryptPass",
-            ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-            if res.returncode == 0:
-                raise AssertionError("Expected non-zero exit code on conflicting archive and encryption passwords")
-            err = res.stderr.decode("utf-8", errors="replace") + res.stdout.decode("utf-8", errors="replace")
-            if "differs from" not in err and "conflict" not in err.lower():
-                raise AssertionError(f"Expected conflict error message, got: {err}")
-
-    all_passed &= run_test("NP-1: Conflicting explicit archive and encryption passwords rejected", test_np1_conflicting_archive_pass)
+    all_passed &= run_test("Independent archive and encryption passwords accepted", test_independent_archive_password)
 
     # Test 3: NP-2 Conflicting -m password rejected
     def test_np2_conflicting_meta_password():

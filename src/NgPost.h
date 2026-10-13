@@ -76,6 +76,9 @@ class NgPost : public QObject, public CmdOrGuiApp
     friend class AutoPostWidget;
     friend class PostingJob;
     friend class AboutNgPost;
+#ifdef NGPOST_TESTING_HOOKS
+    friend class ConfigTest;
+#endif
 
 public:
     enum class Opt {HELP = 0, LANG, VERSION, CONF, SHUTDOWN_CMD, CHECK, QUIET, PROXY_SOCKS5,
@@ -85,7 +88,6 @@ public:
                     MONITOR_FOLDERS, MONITOR_EXT, MONITOR_IGNORE_DIR, MONITOR_SEC_DELAY_SCAN,
                     MSG_ID, META, ENCRYPT, ENCRYPT_PASSWORD,
                     ARTICLE_SIZE, FROM, GROUPS, NB_RETRY, GEN_FROM,
-
                     OBFUSCATE, INPUT_DIR, AUTO_DIR, MONITOR_DIR, DEL_AUTO,
                     TMP_DIR, RAR_PATH, RAR_EXTRA, RAR_SIZE, RAR_MAX, KEEP_RAR,
             #ifdef __USE_TMP_RAM__
@@ -371,7 +373,7 @@ public:
 
     inline bool dispPostingFile() const;
 
-    void saveConfig();
+    void saveConfig(const QString &configPath = QString());
 
     void setDelFilesAfterPosted(bool delFiles);
     void addMonitoringFolder(const QString &dirPath);

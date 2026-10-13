@@ -116,7 +116,7 @@ void CryptoTest::controlLineVectors_data()
         {"control-vec-03-line-2-ypart",           "ypart"},
         {"control-vec-04-line-3-yencryption",     "yencryption"},
         {"control-vec-05-line-4-yend-single",     "yend_single"},
-        {"control-vec-06-line-54-yend-multipart", "yend_multipart"},
+        {"control-vec-06-yend-multipart", "yend_multipart"},
     };
     for(const LineCase &lineCase : lineCases)
     {
