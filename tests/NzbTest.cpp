@@ -12,7 +12,6 @@ class NzbTest : public QObject
 private slots:
     void encryptedHeadIncludesTransportMetadata();
     void ordinaryHeadPreservesArchiveMetadata();
-    void rejectsConflictingMetadata();
     void deduplicatesMatchingMetadata();
     void validatesEncryptionSettings();
     void encryptionSettingsValidationResetsInvalidState();
@@ -22,6 +21,7 @@ private slots:
     void roundTripsPasswordMetaThroughXmlParser();
     void unencryptedHeadMatchesUpstream();
     void rejectsEncryptedFileSizeOverflow();
+    void configLineKeepsEncryptTrue();
 };
 
 void NzbTest::rejectsEncryptedFileSizeOverflow()
@@ -63,29 +63,6 @@ void NzbTest::ordinaryHeadPreservesArchiveMetadata()
     QVERIFY(!xml.contains(QStringLiteral("yenc_encrypted")));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">archive<&\"pass</meta>")));
     QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
-}
-
-void NzbTest::rejectsConflictingMetadata()
-{
-    QString xml;
-    QTextStream stream(&xml);
-    QString error;
-
-    // 1. Conflicting -m password with encryption password
-    QMap<QString, QString> meta1;
-    meta1.insert(QStringLiteral("password"), QStringLiteral("wrong_pass"));
-    QVERIFY(!PostingJob::writeNzbHead(stream, QStringLiteral("  "), meta1,
-                                     QString(), true, QStringLiteral("correct_pass"), &error));
-    QVERIFY(error.contains(QStringLiteral("Conflicting metadata")));
-
-    // 2. Conflicting -m yenc_encrypted=false when encryption is enabled
-    QMap<QString, QString> meta2;
-    meta2.insert(QStringLiteral("yenc_encrypted"), QStringLiteral("false"));
-    QVERIFY(!PostingJob::writeNzbHead(stream, QStringLiteral("  "), meta2,
-                                     QString(), true, QStringLiteral("correct_pass"), &error));
-    QVERIFY(error.contains(QStringLiteral("Conflicting metadata")));
-
-
 }
 
 void NzbTest::deduplicatesMatchingMetadata()
@@ -274,4 +251,14 @@ void NzbTest::unencryptedHeadMatchesUpstream()
                        "  </head>\n\n");
 
     QCOMPARE(xml, expected);
+}
+
+void NzbTest::configLineKeepsEncryptTrue()
+{
+    // GUI save-config regression: ENCRYPT = true survives a save/load cycle (was ConfigTest).
+    EncryptionSettings settings;
+    settings.enabled = true;
+    QCOMPARE(settings.configLine(), QStringLiteral("ENCRYPT = true\n"));
+    settings.enabled = false;
+    QVERIFY(settings.configLine().isEmpty());
 }

@@ -19,10 +19,11 @@
 
 #ifndef YENC_H
 #define YENC_H
+#include "PureStaticClass.h"
+#include <string>
 #include <QByteArray>
 #include <QString>
 #include <QtGlobal>
-#include "PureStaticClass.h"
 
 struct YencEncryptionContext
 {

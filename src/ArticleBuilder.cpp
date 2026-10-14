@@ -48,7 +48,7 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
     if (article)
     {
         QString error;
-        const YencEncryptionContext encryption(_job->_encryptionKeys.masterKey,
+        const YencEncryptionContext encryption(_job->_encryptionKey,
                                                 _job->_encryptionSalt,
                                                 article->segmentIndex());
         const YencEncryptionContext *encryptionPtr = _job->_encryptionEnabled ? &encryption : nullptr;

@@ -66,19 +66,11 @@ public:
 
     bool next(quint32 &segmentIndex)
     {
-        if(_next == 0)
-            return false;
-        while(SegmentIndexAllocator::hasForbiddenByte(_next))
-        {
-            if(_next == 0xFFFFFFFFU)
-                return false; // exhaustion, not wraparound
-            ++_next;
-        }
-        segmentIndex = _next;
-        if(_next == 0xFFFFFFFFU)
-            _next = 0; // fully exhausted; next() will return false
-        else
-            ++_next;
+        do {
+            if(_next == 0)
+                return false;
+            segmentIndex = _next++;
+        } while(hasForbiddenByte(segmentIndex));
         return true;
     }
 };
@@ -174,7 +166,7 @@ private:
     const bool _encryptionEnabled;
     QString _encryptionPassword;
     QByteArray _encryptionSalt;
-    CryptoKeys _encryptionKeys;
+    QByteArray _encryptionKey;
     SegmentIndexAllocator _segmentIndices;
     QString _encryptionError;
 
@@ -210,10 +202,6 @@ private:
 #endif
 
 public:
-#ifdef NGPOST_TESTING_HOOKS
-    friend class ConfigTest;
-    qint64 testFileSize = -1;
-#endif
     PostingJob(NgPost *ngPost,
                const QString &nzbFilePath,
                const QFileInfoList &files,
@@ -235,8 +223,7 @@ public:
                bool keepRar = false,
                bool delFilesAfterPost = false,
                bool overwriteNzb = true,
-               QObject *parent = nullptr,
-               const QString &encryptionPassword = QString());
+               QObject *parent = nullptr);
     ~PostingJob();
 
 
@@ -302,7 +289,7 @@ public:
             EncryptionSettings settings;
             settings.enabled = true;
             settings.password = encryptionPassword;
-            if (!settings.validate(error, meta))
+            if (!settings.validate(error))
                 return false;
 
             stream << tab << "<head>\n";

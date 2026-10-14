@@ -2,9 +2,6 @@
 #define ENCRYPTIONSETTINGS_H
 
 #include <QString>
-#include <QMap>
-
-#include "utils/CmdOrGuiApp.h"
 
 struct EncryptionSettings
 {
@@ -51,7 +48,7 @@ struct EncryptionSettings
         return size >= 0 && size < (qint64(1) << 32);
     }
 
-    bool validate(QString *error = nullptr, const QMap<QString, QString> &meta = {}) const
+    bool validate(QString *error = nullptr) const
     {
         if(enabled && password.isEmpty())
         {
@@ -64,22 +61,6 @@ struct EncryptionSettings
         {
             if(error)
                 *error = QStringLiteral("Encryption password contains characters that cannot be represented in XML 1.0 (control characters or unpaired surrogates); choose another password");
-            return false;
-        }
-        if(enabled && meta.contains(QStringLiteral("yenc_encrypted"))
-                && meta.value(QStringLiteral("yenc_encrypted")).toLower() != QStringLiteral("true"))
-        {
-            if(error)
-                *error = QStringLiteral("Conflicting metadata: -m yenc_encrypted must be 'true' when encryption is enabled");
-            return false;
-        }
-        // Meta values are stored as escapeXML(raw) (NgPost::parseCommandLine), so that exact form is the only match.
-        // Any other form (raw, or CR-escaped as &#xD;) is a different value and must conflict.
-        if(enabled && meta.contains(QStringLiteral("password"))
-                && meta.value(QStringLiteral("password")) != CmdOrGuiApp::escapeXML(password))
-        {
-            if(error)
-                *error = QStringLiteral("Conflicting metadata: -m password differs from --encrypt-password");
             return false;
         }
         return true;

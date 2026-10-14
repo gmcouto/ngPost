@@ -55,8 +55,7 @@ PostingJob::PostingJob(NgPost *ngPost,
                        bool keepRar,
                        bool delFilesAfterPost,
                        bool overwriteNzb,
-                       QObject *parent,
-                       const QString &encryptionPassword) :
+                       QObject *parent) :
     QObject (parent),
     _ngPost(ngPost), _files(files), _postWidget(postWidget),
 
@@ -83,8 +82,9 @@ PostingJob::PostingJob(NgPost *ngPost,
     _stopPosting(0x0), _noMoreFiles(0x0),
     _postStarted(false), _packed(false), _postFinished(false),
     _obfuscateArticles(obfuscateArticles), _obfuscateFileName(obfuscateFileName),
-    _encryptionEnabled(!encryptionPassword.isEmpty()), _encryptionPassword(encryptionPassword),
-    _encryptionSalt(), _encryptionKeys(),
+    _encryptionEnabled(ngPost && ngPost->_encryption.enabled),
+    _encryptionPassword(ngPost ? ngPost->_encryption.password : QString()),
+    _encryptionSalt(), _encryptionKey(),
     _segmentIndices(), _encryptionError(),
     _delFilesAfterPost(delFilesAfterPost ? 0x1 : 0x0),
     _originalFiles(!postWidget || delFilesAfterPost  || obfuscateFileName ? files : QFileInfoList()),
@@ -170,6 +170,11 @@ PostingJob::~PostingJob()
     _encryptionPassword.detach();
     _encryptionPassword.fill(QChar(0));
     _encryptionPassword.clear();
+    if(!_encryptionKey.isEmpty())
+    {
+        sodium_memzero(_encryptionKey.data(), static_cast<size_t>(_encryptionKey.size()));
+        _encryptionKey.clear();
+    }
 }
 
 void PostingJob::pause()
@@ -239,10 +244,10 @@ bool PostingJob::_ensureEncryptionKeys()
 {
     if(!_encryptionEnabled)
         return true;
-    if(!_encryptionKeys.masterKey.isEmpty())
+    if(!_encryptionKey.isEmpty())
         return true;
     QString error;
-    if(_encryptionSalt.size() == 16 && CryptoEngine::deriveKeys(_encryptionPassword, _encryptionSalt, _encryptionKeys, &error))
+    if(_encryptionSalt.size() == 16 && CryptoEngine::deriveKey(_encryptionPassword, _encryptionSalt, _encryptionKey, &error))
         return true;
     _encryptionError = QStringLiteral("Unable to initialize upload encryption: %1").arg(
                 error.isEmpty() ? QStringLiteral("Salt must be exactly 16 bytes") : error);
@@ -252,11 +257,8 @@ bool PostingJob::_ensureEncryptionKeys()
 void PostingJob::onStartPosting(bool isActiveJob)
 {
     _isActiveJob = isActiveJob;
-    EncryptionSettings settings;
-    settings.enabled = _encryptionEnabled;
-    settings.password = _encryptionPassword;
     QString validationError;
-    if(!settings.validate(&validationError, _ngPost->_meta))
+    if(_ngPost && !_ngPost->_encryption.validate(&validationError))
     {
         _error(validationError);
         emit postingFinished();
@@ -390,12 +392,7 @@ void PostingJob::_postFiles()
     {
         for (const QFileInfo &file : _files)
         {
-            qint64 fileSize = file.size();
-#ifdef NGPOST_TESTING_HOOKS
-            if (testFileSize >= 0)
-                fileSize = testFileSize;
-#endif
-            if (!EncryptionSettings::acceptsFileSize(fileSize))
+            if (!EncryptionSettings::acceptsFileSize(file.size()))
             {
                 _error(QStringLiteral("Encrypted file size must be less than 2^32 bytes"));
                 emit postingFinished();

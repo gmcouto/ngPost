@@ -793,17 +793,6 @@ void NgPost::_post(const QFileInfo &fileInfo, const QString &monitorFolder)
             _meta.remove("password");
     }
 
-    // Validate transport settings before creating a posting job.
-    if (_encryption.enabled)
-    {
-        QString encryptionError;
-        if (!_encryption.validate(&encryptionError, _meta))
-        {
-            _error(tr("Skipping %1: %2").arg(fileInfo.absoluteFilePath(), encryptionError));
-            return;
-        }
-    }
-
     qDebug() << "Start posting job for " << _nzbName
              << " with rar_name: " << _rarName << " and pass: " << _rarPass
              << " (auto delete: " << _delAuto << ")";
@@ -814,8 +803,7 @@ void NgPost::_post(const QFileInfo &fileInfo, const QString &monitorFolder)
                                    _tmpPath, _rarPath, _rarArgs,
                                    _rarSize, _useRarMax, _par2Pct,
                                    _doCompress, _doPar2, _rarName, _rarPass,
-                                   _keepRar, _delAuto, false, nullptr,
-                                   _encryption.enabled ? _encryption.password : QString()));
+                                   _keepRar, _delAuto, false));
 
 }
 
@@ -1483,11 +1471,9 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
     {
         for (const QString &meta : parser.values(sOptionNames[Opt::META]))
         {
-            // Split at the first '=' only, so values such as "password=a=b" keep their '='.
-            // An empty key (e.g. "=x") is ignored.
-            const int sep = meta.indexOf('=');
-            if (sep > 0)
-                _meta.insert(escapeXML(meta.left(sep)), escapeXML(meta.mid(sep + 1)));
+            QStringList mList = meta.split("=");
+            if (mList.size() == 2)
+                _meta.insert(escapeXML(mList[0]), escapeXML(mList[1]));
         }
     }
 
@@ -1508,7 +1494,7 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
     if (_encryption.enabled)
     {
         QString encryptionError;
-        if (!_encryption.validate(&encryptionError, _meta))
+        if (!_encryption.validate(&encryptionError))
         {
             _error(tr("Error syntax: %1").arg(encryptionError), ERROR_CODE::ERR_WRONG_ARG);
             return false;
@@ -1850,8 +1836,7 @@ bool NgPost::parseCommandLine(int argc, char *argv[])
                                        _tmpPath, _rarPath, _rarArgs,
                                        _rarSize, _useRarMax, _par2Pct,
                                        _doCompress, _doPar2, _rarName, _rarPass,
-                                       _keepRar, _delAuto, false, nullptr,
-                                       _encryption.enabled ? _encryption.password : QString()));
+                                       _keepRar, _delAuto, false));
     }
 
     if (_autoDirs.size())
@@ -2567,7 +2552,7 @@ void NgPost::_showVersionASCII() const
           << MB_FLUSH;
 }
 
-void NgPost::saveConfig(const QString &configPath)
+void NgPost::saveConfig()
 {
 #if defined(WIN32) || defined(__MINGW64__)
     QString conf = sDefaultConfig;
@@ -2575,8 +2560,6 @@ void NgPost::saveConfig(const QString &configPath)
     QString conf = QString("%1/%2").arg(getenv("HOME")).arg(sDefaultConfig);
 #endif
 
-    if (!configPath.isEmpty())
-        conf = configPath;
     QFile file(conf);
     if (file.open(QIODevice::WriteOnly|QIODevice::Text))
     {

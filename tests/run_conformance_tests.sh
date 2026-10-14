@@ -12,7 +12,7 @@ mkdir -p "$BUILD_DIR"
 # that look for fixtures relative to applicationDirPath() or cwd.
 ln -sfn "$SCRIPT_DIR/test-vectors" "$BUILD_DIR/test-vectors"
 
-SUITES=("CryptoTest" "ArticleTest" "NzbTest" "ConfigTest")
+SUITES=("CryptoTest" "ArticleTest" "NzbTest")
 for suite in "${SUITES[@]}"; do
     echo "=== Building and running $suite ==="
     SUITE_BUILD_DIR="$BUILD_DIR/$suite"

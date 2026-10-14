@@ -76,9 +76,6 @@ class NgPost : public QObject, public CmdOrGuiApp
     friend class AutoPostWidget;
     friend class PostingJob;
     friend class AboutNgPost;
-#ifdef NGPOST_TESTING_HOOKS
-    friend class ConfigTest;
-#endif
 
 public:
     enum class Opt {HELP = 0, LANG, VERSION, CONF, SHUTDOWN_CMD, CHECK, QUIET, PROXY_SOCKS5,
@@ -373,7 +370,7 @@ public:
 
     inline bool dispPostingFile() const;
 
-    void saveConfig(const QString &configPath = QString());
+    void saveConfig();
 
     void setDelFilesAfterPosted(bool delFiles);
     void addMonitoringFolder(const QString &dirPath);

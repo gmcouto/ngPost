@@ -57,11 +57,28 @@ NntpArticle::NntpArticle(NntpFile *file, uint part, qint64 pos, qint64 bytes,
 
 bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encryption, QString *error)
 {
-    if(encryption && encryption->segmentIndex != _segmentIndex)
+    if(!encryption)
     {
-        if(error)
-            *error = QStringLiteral("Article segment index does not match encryption context");
-        return false;
+        // Upstream unencrypted body builder (byte-for-byte identical to 97a84347f1)
+        quint32 crc32    = 0xFFFFFFFF;
+        uchar  *yencBody = new uchar[_fileBytes*2];
+        Yenc::encode(data, _fileBytes, yencBody, crc32);
+
+        std::stringstream ss;
+        ss << "=ybegin part=" << _part << " total=" << _nntpFile->nbArticles() << " line=128"
+           << " size=" << _nntpFile->fileSize() << " name=" << _nntpFile->fileName() << Nntp::ENDLINE
+           << "=ypart begin=" << _filePos + 1 << " end=" << _filePos + _fileBytes << Nntp::ENDLINE
+           << yencBody << Nntp::ENDLINE
+           << "=yend size=" << _fileBytes << " pcrc32=" << std::hex << crc32 << Nntp::ENDLINE
+           << "." << Nntp::ENDLINE;
+
+        delete[] yencBody;
+
+        std::string body = ss.str();
+        _bodySize = static_cast<qint64>(body.length());
+        _body = new char[body.length()+1];
+        std::strcpy(_body, body.c_str());
+        return true;
     }
 
     QByteArray block;
@@ -131,47 +148,17 @@ bool NntpArticle::tryResend()
 void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
 {
     ++_nbTrySending;
-    const std::string h = header(idSignature);
-    con->write(h.data(), static_cast<qint64>(h.size()));
-    // RFC 3977 §3.1.1 dot-stuffing: a body line whose first
-    // byte is 0x2E must have that byte doubled before the socket write, or the
-    // server strips it — corrupting e.g. the Line 1 bootstrap of encrypted
-    // articles. Applied to encrypted articles. The trailing article terminator ("\r\n.\r\n") is exempt.
-    if(_segmentIndex != 0 && _body && _bodySize > 0)
+    if(_segmentIndex == 0)
     {
-        bool needsStuffing = false;
-        bool atLineStart = true;
-        const qint64 terminatorPos = _bodySize - 3;
-        for(qint64 i = 0; i < _bodySize; ++i)
-        {
-            const uchar byte = static_cast<uchar>(_body[i]);
-            if(atLineStart && byte == 0x2E && i != terminatorPos)
-            {
-                needsStuffing = true;
-                break;
-            }
-            atLineStart = (byte == 0x0A);
-        }
-
-        if(needsStuffing)
-        {
-            QByteArray stuffedBody;
-            stuffedBody.resize(static_cast<int>(_bodySize * 2));
-            qint64 outSize = 0;
-            atLineStart = true;
-            for(qint64 i = 0; i < _bodySize; ++i)
-            {
-                const uchar byte = static_cast<uchar>(_body[i]);
-                if(atLineStart && byte == 0x2E && i != terminatorPos)
-                    stuffedBody[static_cast<int>(outSize++)] = '.';
-                stuffedBody[static_cast<int>(outSize++)] = static_cast<char>(byte);
-                atLineStart = (byte == 0x0A);
-            }
-            con->write(stuffedBody.constData(), outSize);
-            return;
-        }
+        con->write(header(idSignature).c_str());
+        con->write(_body);
     }
-    con->write(_body, _bodySize);
+    else
+    {
+        const std::string h = header(idSignature);
+        con->write(h.data(), static_cast<qint64>(h.size()));
+        con->write(_body, _bodySize);
+    }
 }
 
 std::string NntpArticle::header(const std::string &idSignature) const
@@ -201,8 +188,16 @@ void NntpArticle::dumpToFile(const QString &path, const std::string &articleIdSi
         return;
     }
 
-    const std::string h = header(articleIdSignature);
-    file.write(h.data(), static_cast<qint64>(h.size()));
-    file.write(_body, _bodySize);
+    if(_segmentIndex == 0)
+    {
+        file.write(header(articleIdSignature).c_str());
+        file.write(_body);
+    }
+    else
+    {
+        const std::string h = header(articleIdSignature);
+        file.write(h.data(), static_cast<qint64>(h.size()));
+        file.write(_body, _bodySize);
+    }
     file.close();
 }

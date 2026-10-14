@@ -159,17 +159,6 @@ void PostingWidget::postFiles(bool updateMainParams)
         }
         udatePostingParams();
 
-        // Validate transport settings before creating a posting job.
-        if (_ngPost->_encryption.enabled)
-        {
-            QString encryptionError;
-            if (!_ngPost->_encryption.validate(&encryptionError, _ngPost->_meta))
-            {
-                _hmi->logError(encryptionError);
-                return;
-            }
-        }
-
         // check if the nzb file name already exist
         QString nzbPath = _ngPost->nzbPath();
         if (!nzbPath.endsWith(".nzb"))
@@ -196,8 +185,7 @@ void PostingWidget::postFiles(bool updateMainParams)
                                      _ngPost->_rarSize, _ngPost->_useRarMax, _ngPost->_par2Pct,
                                      _ngPost->_doCompress, _ngPost->_doPar2,
                                      _ngPost->_rarName, _ngPost->_rarPass,
-                                     _ngPost->_keepRar, false, true, nullptr,
-                                     _ngPost->_encryption.enabled ? _ngPost->_encryption.password : QString());
+                                     _ngPost->_keepRar);
 
         bool hasStarted = _ngPost->startPostingJob(_postingJob);
 

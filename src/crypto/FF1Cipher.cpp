@@ -2,7 +2,6 @@
 
 #include "CryptoEngine.h"
 
-#include <QDebug>
 #include <QtEndian>
 
 #include <openssl/bn.h>
@@ -420,61 +419,12 @@ QByteArray joinLines(const std::vector<Line> &lines)
     }
     return block;
 }
-
-bool parseYencryptionLine(const QByteArray &line, QByteArray &salt, quint32 &segmentIndex, QByteArray *tag = nullptr)
-{
-    const QByteArray prefix = QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=");
-    if(line.size() != 128 || !line.startsWith(prefix))
-        return false;
-    const QByteArray saltHex = line.mid(44, 32);
-    if(line.mid(76, 7) != QByteArrayLiteral(" index="))
-        return false;
-    const QByteArray indexHex = line.mid(83, 8);
-    if(line.mid(91, 5) != QByteArrayLiteral(" tag="))
-        return false;
-    const QByteArray tagHex = line.mid(96, 32);
-
-    for(char value : saltHex)
-    {
-        if(!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f')))
-            return false;
-    }
-    for(char value : indexHex)
-    {
-        if(!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f')))
-            return false;
-    }
-    for(char value : tagHex)
-    {
-        if(!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f')))
-            return false;
-    }
-
-    bool ok = false;
-    const quint32 index = indexHex.toUInt(&ok, 16);
-    if(!ok || index == 0)
-        return false;
-
-    salt = QByteArray::fromHex(saltHex);
-    if(salt.size() != SaltSize)
-        return false;
-
-    segmentIndex = index;
-    if(tag)
-        *tag = QByteArray::fromHex(tagHex);
-    return true;
-}
 }
 
 bool FF1Cipher::isAlphabetByte(uchar value)
 {
     uchar numeral = 0;
     return byteToNumeral(value, numeral);
-}
-
-bool FF1Cipher::parseYencryptionLine(const QByteArray &line, QByteArray &salt, quint32 &segmentIndex, QByteArray *tag)
-{
-    return ::parseYencryptionLine(line, salt, segmentIndex, tag);
 }
 
 bool FF1Cipher::encryptLine(const QByteArray &plaintext, const QByteArray &masterKey, quint32 segmentIndex,
@@ -560,18 +510,6 @@ bool FF1Cipher::encryptControlLines(const QByteArray &block, const QByteArray &m
                 setError(error, QStringLiteral("yEnc block contains duplicate =yencryption lines"));
                 return false;
             }
-            QByteArray headerSalt;
-            quint32 headerIndex = 0;
-            if(!parseYencryptionLine(line.content, headerSalt, headerIndex))
-            {
-                setError(error, QStringLiteral("Malformed =yencryption line"));
-                return false;
-            }
-            if(headerSalt != salt || headerIndex != segmentIndex)
-            {
-                setError(error, QStringLiteral("Line 1 salt and =yencryption salt must match"));
-                return false;
-            }
             foundEncryptionHeader = true;
         }
         if(isControlLine(line.content))
@@ -580,6 +518,8 @@ bool FF1Cipher::encryptControlLines(const QByteArray &block, const QByteArray &m
             if(!encryptLine(line.content, masterKey, segmentIndex, static_cast<quint32>(offset + 1),
                             salt, encrypted, error))
                 return false;
+            if(encrypted.startsWith('.'))
+                encrypted.prepend('.');
             line.content = encrypted;
         }
     }

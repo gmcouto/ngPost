@@ -145,10 +145,9 @@ bool CryptoEngine::deriveKey(const QString &password, const QByteArray &salt, QB
     return true;
 }
 
-bool CryptoEngine::deriveKeys(const QString &password, const QByteArray &salt, CryptoKeys &keys, QString *error)
+bool CryptoEngine::deriveKeys(const QString &password, const QByteArray &salt, QByteArray &keys, QString *error)
 {
-    keys = CryptoKeys();
-    return deriveKey(password, salt, keys.masterKey, error);
+    return deriveKey(password, salt, keys, error);
 }
 
 bool CryptoEngine::deriveBodyNonce(const QByteArray &key, quint32 segmentIndex, QByteArray &nonce, QString *error)

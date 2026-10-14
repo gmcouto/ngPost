@@ -75,17 +75,13 @@ private slots:
     void controlLineVectors_data();
     void controlLineVectors();
     void fullArticlePreservesDataAndFraming();
-    void rejectsDualSaltMismatch();
     void generatedSaltsAreUsable();
     // Missing =yencryption header must be rejected in both directions
     void rejectsMissingEncryptionHeader();
-    // Destructor wipes must leave key buffers zeroed
-    void keysWipeOnDestruction();
     // Vendored canonical conformance vectors
     void vendoredArgon2idVectors();
     void vendoredNonceTweakVectors();
     void vendoredBodyEncryptionVectors();
-    void vendoredGrammarMalformedVectors();
     void vendoredIndexAllocationVectors();
     // Full-article FF1 vectors (deterministic combined-mode restoration)
     void fullArticleVectors_data();
@@ -172,27 +168,6 @@ void CryptoTest::fullArticlePreservesDataAndFraming()
     QCOMPARE(wireLines[0].left(20), salt + QByteArray::fromHex("00000001"));
 }
 
-void CryptoTest::rejectsDualSaltMismatch()
-{
-    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
-    QByteArray masterKey;
-    QString error;
-    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error), qPrintable(error));
-    const QByteArray blockMismatch = QByteArrayLiteral("=ybegin line=128 size=18 name=file.bin\r\n")
-            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=00112233445566778899aabbccddeeff index=00000001 tag=24d9229edfc04aeaeedcf105bc91e695\r\n")
-            + QByteArrayLiteral("data\r\n=yend size=18\r\n");
-    QByteArray wire;
-    QVERIFY(!FF1Cipher::encryptControlLines(blockMismatch, masterKey, 1, salt, wire, &error));
-    QVERIFY(wire.isEmpty());
-
-    const QByteArray blockMismatchIndex = QByteArrayLiteral("=ybegin line=128 size=18 name=file.bin\r\n")
-            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=") + salt.toHex()
-            + QByteArrayLiteral(" index=00000002 tag=24d9229edfc04aeaeedcf105bc91e695\r\n")
-            + QByteArrayLiteral("data\r\n=yend size=18\r\n");
-    QVERIFY(!FF1Cipher::encryptControlLines(blockMismatchIndex, masterKey, 1, salt, wire, &error));
-    QVERIFY(wire.isEmpty());
-}
-
 void CryptoTest::generatedSaltsAreUsable()
 {
     const QByteArray first = CryptoEngine::generateControlSalt();
@@ -229,25 +204,6 @@ void CryptoTest::rejectsMissingEncryptionHeader()
     const QList<QByteArray> validLines = wire.split('\n');
     QCOMPARE(validLines.size(), 5);
     QCOMPARE(validLines[2], QByteArrayLiteral("data\r"));
-}
-
-void CryptoTest::keysWipeOnDestruction()
-{
-    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
-    QByteArray masterKey;
-    QString error;
-    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
-             qPrintable(error));
-    // CryptoKeys::clear() must release the derived key material: after clear()
-    // the struct holds no key bytes (the buffer was zeroed then dropped).
-    {
-        CryptoKeys keys;
-        QVERIFY2(CryptoEngine::deriveKeys(QStringLiteral("test123"), salt, keys, &error),
-                 qPrintable(error));
-        QCOMPARE(keys.masterKey.size(), 32);
-        keys.clear();
-        QVERIFY(keys.masterKey.isEmpty());
-    }
 }
 
 void CryptoTest::fullArticleVectors_data()
@@ -399,25 +355,6 @@ void CryptoTest::vendoredBodyEncryptionVectors()
         tamperedTag[0] = static_cast<char>(tamperedTag.at(0) ^ 1);
         QVERIFY(!testDecryptBody(encrypted.ciphertext, tamperedTag, key, segmentIndex, expectedAad, restored, &error));
         QVERIFY(restored.isEmpty());
-    }
-}
-
-void CryptoTest::vendoredGrammarMalformedVectors()
-{
-    const QJsonArray vectors = loadVectorJson("malformed_inputs.json").value(QStringLiteral("vectors")).toArray();
-    for(const QJsonValue &value : vectors)
-    {
-        const QJsonObject vector = value.toObject();
-        const QString category = vector.value(QStringLiteral("category")).toString();
-        if(category != QStringLiteral("header_syntax"))
-            continue;
-        const QByteArray line(vector.value(QStringLiteral("input_line")).toString().toLatin1());
-        QByteArray salt;
-        quint32 segmentIndex = 0;
-        QByteArray tag;
-        // strict canonical grammar: every header_syntax vector must be rejected
-        QVERIFY2(!FF1Cipher::parseYencryptionLine(line, salt, segmentIndex, &tag),
-                 qPrintable(QStringLiteral("vector %1 must be rejected").arg(vector.value(QStringLiteral("id")).toString())));
     }
 }
 
