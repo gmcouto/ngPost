@@ -154,7 +154,7 @@ qint64 Yenc::encode(const char data[], qint64 dataSize, uchar encbuffer[], quint
 
 bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 totalParts,
                          qint64 fileSize, qint64 filePosition, const QByteArray &fileName,
-                         const YencEncryptionContext *encryption, QByteArray &article,
+                         const YencEncryptionContext &encryption, QByteArray &article,
                          quint32 &wireCrc32, QString *error)
 {
     article.clear();
@@ -167,31 +167,26 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
         return false;
     }
 
-    QByteArray wirePayload = plaintext;
-    QByteArray encryptionLine;
-    if(encryption)
+    if(encryption.salt.size() != 16 || encryption.segmentIndex == 0)
     {
-        if(encryption->salt.size() != 16 || encryption->segmentIndex == 0)
-        {
-            setError(error, QStringLiteral("Invalid encryption context"));
-            return false;
-        }
-        const quint32 partNum = (totalParts == 1) ? 1 : part;
-        const quint32 partBeg = (totalParts == 1) ? 1 : static_cast<quint32>(filePosition + 1);
-        const quint64 segBytes = (totalParts == 1) ? static_cast<quint64>(fileSize) : static_cast<quint64>(plaintext.size());
-        const QByteArray aad = CryptoEngine::buildBodyAad(partNum, partBeg, segBytes, fileName);
-
-        BodyEncryptionResult encrypted;
-        if(!CryptoEngine::encryptBody(plaintext, encryption->masterKey, encryption->segmentIndex,
-                                      aad, encrypted, error))
-            return false;
-        wirePayload = encrypted.ciphertext;
-        const QByteArray indexHex = QStringLiteral("%1").arg(encryption->segmentIndex, 8, 16, QLatin1Char('0')).toLatin1();
-        encryptionLine = QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
-                + encryption->salt.toHex()
-                + QByteArrayLiteral(" index=") + indexHex
-                + QByteArrayLiteral(" tag=") + encrypted.tag.toHex();
+        setError(error, QStringLiteral("Invalid encryption context"));
+        return false;
     }
+    const quint32 partNum = (totalParts == 1) ? 1 : part;
+    const quint32 partBeg = (totalParts == 1) ? 1 : static_cast<quint32>(filePosition + 1);
+    const quint64 segBytes = (totalParts == 1) ? static_cast<quint64>(fileSize) : static_cast<quint64>(plaintext.size());
+    const QByteArray aad = CryptoEngine::buildBodyAad(partNum, partBeg, segBytes, fileName);
+
+    BodyEncryptionResult encrypted;
+    if(!CryptoEngine::encryptBody(plaintext, encryption.masterKey, encryption.segmentIndex,
+                                  aad, encrypted, error))
+        return false;
+    const QByteArray &wirePayload = encrypted.ciphertext;
+    const QByteArray indexHex = QStringLiteral("%1").arg(encryption.segmentIndex, 8, 16, QLatin1Char('0')).toLatin1();
+    const QByteArray encryptionLine = QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
+            + encryption.salt.toHex()
+            + QByteArrayLiteral(" index=") + indexHex
+            + QByteArrayLiteral(" tag=") + encrypted.tag.toHex();
 
     if(wirePayload.size() > (std::numeric_limits<int>::max() - 4) / 2)
     {
@@ -214,7 +209,7 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
     }
     encoded.resize(static_cast<int>(encodedSize - 1));
 
-    const bool encryptedSinglePart = encryption && totalParts == 1;
+    const bool encryptedSinglePart = totalParts == 1;
     if(encryptedSinglePart)
     {
         article = QByteArrayLiteral("=ybegin line=128 size=") + QByteArray::number(fileSize)
@@ -230,42 +225,28 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
                 + QByteArrayLiteral(" end=") + QByteArray::number(filePosition + plaintext.size())
                 + QByteArrayLiteral("\r\n");
     }
-    if(!encryptionLine.isEmpty())
-        article += encryptionLine + QByteArrayLiteral("\r\n");
+    article += encryptionLine + QByteArrayLiteral("\r\n");
     article += encoded;
-    if(encryption)
-    {
-        // Ensure exactly one CRLF delimiter precedes =yend. If encoded already ends
-        // with \r\n (which occurs when the encoded stream wraps on an exact 128-column boundary)
-        // or if encoded is empty (zero-byte payload), do not inject a blank line.
-        if(!encoded.isEmpty() && !encoded.endsWith("\r\n"))
-            article += QByteArrayLiteral("\r\n");
-        article += QByteArrayLiteral("=yend size=") + QByteArray::number(wirePayload.size());
-        if(encryptedSinglePart)
-            article += QByteArrayLiteral(" crc32=");
-        else
-            article += QByteArrayLiteral(" part=") + QByteArray::number(part) + QByteArrayLiteral(" pcrc32=");
-        article += QByteArray::number(wireCrc32, 16).rightJustified(8, '0') + QByteArrayLiteral("\r\n");
-    }
-    else
-    {
+    // Ensure exactly one CRLF delimiter precedes =yend. If encoded already ends
+    // with \r\n (which occurs when the encoded stream wraps on an exact 128-column boundary)
+    // or if encoded is empty (zero-byte payload), do not inject a blank line.
+    if(!encoded.isEmpty() && !encoded.endsWith("\r\n"))
         article += QByteArrayLiteral("\r\n");
-        article += QByteArrayLiteral("=yend size=") + QByteArray::number(wirePayload.size())
-                + QByteArrayLiteral(" pcrc32=")
-                + QByteArray::number(wireCrc32, 16) + QByteArrayLiteral("\r\n");
-    }
+    article += QByteArrayLiteral("=yend size=") + QByteArray::number(wirePayload.size());
+    if(encryptedSinglePart)
+        article += QByteArrayLiteral(" crc32=");
+    else
+        article += QByteArrayLiteral(" part=") + QByteArray::number(part) + QByteArrayLiteral(" pcrc32=");
+    article += QByteArray::number(wireCrc32, 16).rightJustified(8, '0') + QByteArrayLiteral("\r\n");
 
-    if(encryption)
+    QByteArray encryptedControls;
+    if(!FF1Cipher::encryptControlLines(article, encryption.masterKey, encryption.segmentIndex,
+                                       encryption.salt, encryptedControls, error))
     {
-        QByteArray encryptedControls;
-        if(!FF1Cipher::encryptControlLines(article, encryption->masterKey, encryption->segmentIndex,
-                                           encryption->salt, encryptedControls, error))
-        {
-            article.clear();
-            wireCrc32 = 0;
-            return false;
-        }
-        article = encryptedControls;
+        article.clear();
+        wireCrc32 = 0;
+        return false;
     }
+    article = encryptedControls;
     return true;
 }

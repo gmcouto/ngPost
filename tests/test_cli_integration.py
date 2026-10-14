@@ -446,6 +446,40 @@ def main():
 
     all_passed &= run_test("Socket-level article transmission and framing", test_socket_dot_stuffing)
 
+    def test_ordinary_post_body_snapshot():
+        # The disconnected ordinary helper mode was removed (T08); ordinary posting
+        # coverage comes from this real CLI fake-NNTP capture. The capture excludes
+        # the trailing NNTP dot terminator (the server's POST acceptance already
+        # checks that line). This short sample avoids the unrelated upstream
+        # worst-case allocation path in NntpArticle.cpp.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                payload = bytes.fromhex("48656c6c6f20576f726c642e747874ff")
+                rc, _, err = run_ngpost(ngpost_bin, tmpdir, server=server, payload=payload)
+                if rc != 0:
+                    raise AssertionError(f"Process failed (code {rc}): {err}")
+                if len(server.raw_article_bodies) != 1:
+                    raise AssertionError(f"Expected 1 article body, got {len(server.raw_article_bodies)}")
+
+                body = server.raw_article_bodies[0].split(b"\r\n\r\n", 1)[1]
+                expected = (
+                    b"=ybegin part=1 total=1 line=128 size=16 name=test.txt\r\n"
+                    b"=ypart begin=1 end=16\r\n"
+                    b"r\x8f\x96\x96\x99J\x81\x99\x9c\x96\x8eX\x9e\xa2\x9e)\r\n"
+                    b"=yend size=16 pcrc32=615f3aca\r\n"
+                )
+                if body != expected:
+                    raise AssertionError(
+                        "Ordinary yEnc body mismatch:\n"
+                        f"expected {expected!r}\n"
+                        f"captured {body!r}"
+                    )
+            finally:
+                server.close()
+
+    all_passed &= run_test("Ordinary post body matches upstream-compatible yEnc snapshot", test_ordinary_post_body_snapshot)
+
     if not all_passed:
         print("\nSome CLI integration tests FAILED!")
         sys.exit(1)

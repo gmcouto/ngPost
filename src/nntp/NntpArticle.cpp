@@ -85,7 +85,7 @@ bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encry
     quint32 crc32 = 0;
     if(!Yenc::encodeArticle(QByteArray(data, static_cast<int>(_fileBytes)), _part,
                             _nntpFile->nbArticles(), _nntpFile->fileSize(), _filePos,
-                            QByteArray::fromStdString(_nntpFile->fileName()), encryption,
+                            QByteArray::fromStdString(_nntpFile->fileName()), *encryption,
                             block, crc32, error))
         return false;
     block += QByteArrayLiteral(".\r\n");

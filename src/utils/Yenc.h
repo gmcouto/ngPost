@@ -42,7 +42,7 @@ public:
     static qint64 encode(const char data[], qint64 dataSize, uchar encbuffer[], quint32 &crc32);
     static bool encodeArticle(const QByteArray &plaintext, quint32 part, quint32 totalParts,
                               qint64 fileSize, qint64 filePosition, const QByteArray &fileName,
-                              const YencEncryptionContext *encryption, QByteArray &article,
+                              const YencEncryptionContext &encryption, QByteArray &article,
                               quint32 &wireCrc32, QString *error = nullptr);
 
 private:
