@@ -283,6 +283,88 @@ def main():
 
     all_passed &= run_test("XML escaping and single authoritative password emission", test_xml_escaping_and_single_password_emission)
 
+    def test_encrypted_nzb_omits_unsupported_and_empty_version_cipher_meta():
+        # NP-NEXT-1: In encrypted mode, writeNzbHead emits combined v1.2 content.
+        # User-supplied or empty yenc_version and yenc_cipher must be omitted
+        # while preserving other arbitrary metadata and transport metadata.
+        # 1. Unsupported non-canonical values
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                rc, nzb, err = run_ngpost(
+                    ngpost_bin, tmpdir, server=server,
+                    extra_args=["-m", "yenc_version=0.1", "-m", "yenc_cipher=AES-GCM",
+                                "-m", "category=test",
+                                "--encrypt", "--encrypt-password", "AuthoritativePass123"]
+                )
+                if rc != 0:
+                    raise AssertionError(f"Process failed (code {rc}): {err}")
+                if '<meta type="yenc_encrypted">true</meta>' not in nzb:
+                    raise AssertionError("NZB missing yenc_encrypted metadata")
+                if '<meta type="password">AuthoritativePass123</meta>' not in nzb:
+                    raise AssertionError("NZB missing authoritative transport password")
+                if '<meta type="category">test</meta>' not in nzb:
+                    raise AssertionError("Custom metadata was lost")
+                if "yenc_version" in nzb:
+                    raise AssertionError(f"Contradictory yenc_version survived in encrypted NZB: {nzb}")
+                if "yenc_cipher" in nzb:
+                    raise AssertionError(f"Contradictory yenc_cipher survived in encrypted NZB: {nzb}")
+            finally:
+                server.close()
+
+        # 2. Empty values
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                rc, nzb, err = run_ngpost(
+                    ngpost_bin, tmpdir, server=server,
+                    extra_args=["-m", "yenc_version=", "-m", "yenc_cipher=",
+                                "-m", "category=test2",
+                                "--encrypt", "--encrypt-password", "AuthoritativePass123"]
+                )
+                if rc != 0:
+                    raise AssertionError(f"Process failed (code {rc}): {err}")
+                if '<meta type="yenc_encrypted">true</meta>' not in nzb:
+                    raise AssertionError("NZB missing yenc_encrypted metadata")
+                if '<meta type="password">AuthoritativePass123</meta>' not in nzb:
+                    raise AssertionError("NZB missing authoritative transport password")
+                if '<meta type="category">test2</meta>' not in nzb:
+                    raise AssertionError("Custom metadata was lost")
+                if "yenc_version" in nzb:
+                    raise AssertionError(f"Empty yenc_version survived in encrypted NZB: {nzb}")
+                if "yenc_cipher" in nzb:
+                    raise AssertionError(f"Empty yenc_cipher survived in encrypted NZB: {nzb}")
+            finally:
+                server.close()
+
+    all_passed &= run_test("Encrypted NZB omits unsupported and empty version/cipher metadata", test_encrypted_nzb_omits_unsupported_and_empty_version_cipher_meta)
+
+    def test_ordinary_nzb_preserves_arbitrary_metadata():
+        # Upstream ordinary metadata handling must remain untouched: arbitrary keys
+        # including yenc_version / yenc_cipher are passed through when encryption is off.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            server = FakeNntpServer()
+            try:
+                rc, nzb, err = run_ngpost(
+                    ngpost_bin, tmpdir, server=server,
+                    extra_args=["-m", "yenc_version=0.1", "-m", "yenc_cipher=AES-GCM",
+                                "-m", "category=movies"]
+                )
+                if rc != 0:
+                    raise AssertionError(f"Process failed (code {rc}): {err}")
+                if '<meta type="yenc_version">0.1</meta>' not in nzb:
+                    raise AssertionError("Ordinary NZB missing yenc_version metadata")
+                if '<meta type="yenc_cipher">AES-GCM</meta>' not in nzb:
+                    raise AssertionError("Ordinary NZB missing yenc_cipher metadata")
+                if '<meta type="category">movies</meta>' not in nzb:
+                    raise AssertionError("Ordinary NZB missing category metadata")
+                if "yenc_encrypted" in nzb:
+                    raise AssertionError("Ordinary NZB unexpectedly contains yenc_encrypted")
+            finally:
+                server.close()
+
+    all_passed &= run_test("Ordinary NZB preserves arbitrary version/cipher metadata", test_ordinary_nzb_preserves_arbitrary_metadata)
+
     def test_config_encrypt_accepts_cli_password():
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()

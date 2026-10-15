@@ -295,8 +295,9 @@ public:
             stream << tab << "<head>\n";
             for (auto itMeta = meta.cbegin(); itMeta != meta.cend(); ++itMeta)
             {
-                if (itMeta.key() == QStringLiteral("password") || itMeta.key() == QStringLiteral("yenc_encrypted"))
-                    continue; // Emitted authoritatively below
+                if (itMeta.key() == QStringLiteral("password") || itMeta.key() == QStringLiteral("yenc_encrypted")
+                        || itMeta.key() == QStringLiteral("yenc_version") || itMeta.key() == QStringLiteral("yenc_cipher"))
+                    continue; // Emitted authoritatively below, or omitted (optional fields whose user values could contradict actual v1.2 content)
                 stream << tab << tab << "<meta type=\"" << itMeta.key() << "\">" << itMeta.value() << "</meta>\n";
             }
 

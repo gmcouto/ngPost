@@ -20,6 +20,8 @@ private slots:
     void roundTripsPasswordMetaThroughXmlParser_data();
     void roundTripsPasswordMetaThroughXmlParser();
     void unencryptedHeadMatchesUpstream();
+    void encryptedHeadOmitsProtocolVersionAndCipherMetadata();
+    void ordinaryHeadPreservesArbitraryVersionAndCipherMetadata();
     void rejectsEncryptedFileSizeOverflow();
     void configLineKeepsEncryptTrue();
 };
@@ -251,6 +253,76 @@ void NzbTest::unencryptedHeadMatchesUpstream()
                        "  </head>\n\n");
 
     QCOMPARE(xml, expected);
+}
+
+void NzbTest::encryptedHeadOmitsProtocolVersionAndCipherMetadata()
+{
+    // NP-NEXT-1: In encrypted mode, writeNzbHead emits combined v1.2 content with
+    // authoritative yenc_encrypted=true and password. Optional yenc_version and
+    // yenc_cipher must be omitted rather than preserving contradictory user values
+    // or empty tags.
+    QMap<QString, QString> meta;
+    meta.insert(QStringLiteral("category"), QStringLiteral("test"));
+    meta.insert(QStringLiteral("custom_key"), QStringLiteral("custom_val"));
+    meta.insert(QStringLiteral("yenc_version"), QStringLiteral("0.1"));
+    meta.insert(QStringLiteral("yenc_cipher"), QStringLiteral("AES-GCM"));
+
+    QString xml;
+    QTextStream stream(&xml);
+    QString error;
+    QVERIFY(PostingJob::writeNzbHead(stream, QStringLiteral("  "), meta,
+                                    QStringLiteral("archive-pass"),
+                                    true,
+                                    QStringLiteral("transport<&\"pass"),
+                                    &error));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"yenc_encrypted\">true</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">transport&lt;&amp;&quot;pass</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"custom_key\">custom_val</meta>")));
+    QVERIFY(!xml.contains(QStringLiteral("yenc_version")));
+    QVERIFY(!xml.contains(QStringLiteral("yenc_cipher")));
+    QCOMPARE(xml.count(QStringLiteral("type=\"yenc_encrypted\"")), 1);
+    QCOMPARE(xml.count(QStringLiteral("type=\"password\"")), 1);
+
+    // Also verify with empty strings for yenc_version and yenc_cipher
+    QMap<QString, QString> emptyMeta;
+    emptyMeta.insert(QStringLiteral("yenc_version"), QString());
+    emptyMeta.insert(QStringLiteral("yenc_cipher"), QString());
+    emptyMeta.insert(QStringLiteral("category"), QStringLiteral("valid"));
+
+    QString emptyXml;
+    QTextStream emptyStream(&emptyXml);
+    QVERIFY(PostingJob::writeNzbHead(emptyStream, QStringLiteral("  "), emptyMeta,
+                                    QString(),
+                                    true,
+                                    QStringLiteral("myPass"),
+                                    &error));
+    QVERIFY(emptyXml.contains(QStringLiteral("<meta type=\"category\">valid</meta>")));
+    QVERIFY(emptyXml.contains(QStringLiteral("<meta type=\"yenc_encrypted\">true</meta>")));
+    QVERIFY(emptyXml.contains(QStringLiteral("<meta type=\"password\">myPass</meta>")));
+    QVERIFY(!emptyXml.contains(QStringLiteral("yenc_version")));
+    QVERIFY(!emptyXml.contains(QStringLiteral("yenc_cipher")));
+}
+
+void NzbTest::ordinaryHeadPreservesArbitraryVersionAndCipherMetadata()
+{
+    // Upstream ordinary metadata handling must remain untouched: arbitrary keys
+    // including yenc_version / yenc_cipher are passed through when encryption is off.
+    QMap<QString, QString> meta;
+    meta.insert(QStringLiteral("category"), QStringLiteral("test"));
+    meta.insert(QStringLiteral("yenc_version"), QStringLiteral("0.1"));
+    meta.insert(QStringLiteral("yenc_cipher"), QStringLiteral("AES-GCM"));
+
+    QString xml;
+    QTextStream stream(&xml);
+    QString error;
+    QVERIFY(PostingJob::writeNzbHead(stream, QStringLiteral("  "), meta,
+                                    QString(),
+                                    false, QString(), &error));
+    QVERIFY(!xml.contains(QStringLiteral("yenc_encrypted")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"yenc_version\">0.1</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"yenc_cipher\">AES-GCM</meta>")));
 }
 
 void NzbTest::configLineKeepsEncryptTrue()
