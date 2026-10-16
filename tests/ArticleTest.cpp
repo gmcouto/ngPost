@@ -1,6 +1,6 @@
 #include <QtTest>
 
-#include "PostingJob.h"
+#include "SegmentIndexAllocator.h"
 #include "crypto/CryptoEngine.h"
 #include "utils/Yenc.h"
 
@@ -11,6 +11,8 @@ class ArticleTest : public QObject
 private slots:
     void encryptedSinglePartUsesStrictFraming();
     void encryptedMultipartUsesStrictFraming();
+    // Q-1 / NGPOST-TESTS-06: final part (part=2,totalParts=2, non-zero filePosition)
+    void encryptedMultipartFinalPartUsesStrictFraming();
     void segmentIndicesProgressReleaseWide();
     void segmentIndexAllocatorRejectsExhaustion();
     // Index framing rule: allocator must skip indices whose uint32_be contains 0x0A/0x0D
@@ -67,6 +69,52 @@ void ArticleTest::encryptedMultipartUsesStrictFraming()
     QVERIFY(!wire.contains("=yend"));
     const QList<QByteArray> lines = wire.split('\n');
     QVERIFY(lines.size() >= 4);
+}
+
+void ArticleTest::encryptedMultipartFinalPartUsesStrictFraming()
+{
+    // Final part of a 2-part file: part=2, totalParts=2, non-zero filePosition.
+    // Exact wire line structure (split by '\n', each line CR-terminated except
+    // the trailing empty element): Line 1 bootstrap (encrypted =ybegin),
+    // encrypted =ypart, encrypted =yencryption, >=1 yEnc data line(s),
+    // encrypted =yend. Control lines are FF1-encrypted, so the plaintext
+    // markers must not appear; the no-whole-file-crc32= rule (Q-1) is asserted
+    // structurally on the produced wire (see note below).
+    const QByteArray plaintext = QByteArray::fromHex("48656c6c6f20576f726c642e747874ff");
+    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
+    QByteArray masterKey;
+    QString error;
+    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error),
+             qPrintable(error));
+    YencEncryptionContext encryption(masterKey, salt, 1);
+
+    QByteArray wire;
+    quint32 crc32 = 0;
+    QVERIFY2(Yenc::encodeArticle(plaintext, 2, 2, plaintext.size() * 2, plaintext.size(),
+                                  QByteArrayLiteral("file.bin"),
+                                  encryption, wire, crc32, &error), qPrintable(error));
+    QVERIFY(crc32 != 0);
+    QCOMPARE(wire.left(16), salt);
+    QCOMPARE(wire.mid(16, 4), QByteArray::fromHex("00000001"));
+    QVERIFY(!wire.contains("=ybegin"));
+    QVERIFY(!wire.contains("=ypart"));
+    QVERIFY(!wire.contains("=yencryption"));
+    QVERIFY(!wire.contains("=yend"));
+    // Whole-file crc32= must never appear on an encrypted multipart =yend;
+    // only per-part pcrc32= is allowed (Q-1). It cannot appear literally here
+    // because the =yend line is FF1-encrypted; the exact-structure assertion
+    // below (5 control/data lines, =yend last) plus encodeArticle's branch
+    // (part= token + pcrc32= for multipart) is what this test can pin at the
+    // wire level, and the literal token check guards against a regression
+    // that leaves plaintext control lines unencrypted.
+    QVERIFY(!wire.contains("crc32="));
+    QVERIFY(!wire.contains("pcrc32="));
+    const QList<QByteArray> lines = wire.split('\n');
+    // 5 lines + trailing empty element after the final CRLF.
+    QCOMPARE(lines.size(), 6);
+    QVERIFY(lines.at(5).isEmpty());
+    for(int i = 0; i < 5; ++i)
+        QVERIFY2(lines.at(i).endsWith('\r'), qPrintable(QStringLiteral("line %1 not CR-terminated").arg(i)));
 }
 
 void ArticleTest::segmentIndicesProgressReleaseWide()

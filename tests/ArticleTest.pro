@@ -11,6 +11,7 @@ SOURCES += \
     ../src/utils/Yenc.cpp
 
 HEADERS += \
+    ../src/SegmentIndexAllocator.h \
     ../src/crypto/CryptoEngine.h \
     ../src/crypto/FF1Cipher.h \
     ../src/utils/PureStaticClass.h \

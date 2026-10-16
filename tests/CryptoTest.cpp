@@ -6,9 +6,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include "SegmentIndexAllocator.h"
 #include "crypto/CryptoEngine.h"
 #include "crypto/FF1Cipher.h"
-#include "../src/PostingJob.h"
+#include "utils/Yenc.h"
 
 namespace
 {
@@ -86,6 +87,9 @@ private slots:
     // Full-article FF1 vectors (deterministic combined-mode restoration)
     void fullArticleVectors_data();
     void fullArticleVectors();
+    // NGPOST-TESTS-03 (1): a control line whose FF1 ciphertext starts with '.'
+    // must be dot-stuffed ('..') on the wire.
+    void encryptControlLinesDotStuffsLeadingDot();
 };
 
 void CryptoTest::controlLineVectors_data()
@@ -209,8 +213,11 @@ void CryptoTest::rejectsMissingEncryptionHeader()
 void CryptoTest::fullArticleVectors_data()
 {
     QTest::addColumn<QString>("fixtureId");
+    QTest::newRow("full_article_5_lines") << QStringLiteral("control-vec-07-full-article-5-lines");
     QTest::newRow("combined_one_byte") << QStringLiteral("control-vec-11-combined-one-byte-data");
     QTest::newRow("full_article_54_lines") << QStringLiteral("control-vec-08-full-article-54-lines");
+    QTest::newRow("one_byte_data") << QStringLiteral("control-vec-09-one-byte-data");
+    QTest::newRow("exact_wrap_article_6_lines") << QStringLiteral("control-vec-10-exact-wrap-article-6-lines");
     // single-part article whose name= contains " part=" must keep single-part layout (Control Std Section 9)
     QTest::newRow("single_part_name_contains_part") << QStringLiteral("control-vec-12-single-part-name-contains-part");
 }
@@ -340,11 +347,88 @@ void CryptoTest::vendoredBodyEncryptionVectors()
         QVERIFY2(CryptoEngine::encryptBody(plaintext, key, segmentIndex, expectedAad, encrypted, &error), qPrintable(error));
         QCOMPARE(encrypted.ciphertext, QByteArray::fromHex(vector.value(QStringLiteral("expected_ciphertext_hex")).toString().toLatin1()));
         QCOMPARE(encrypted.tag, QByteArray::fromHex(vector.value(QStringLiteral("expected_tag_hex")).toString().toLatin1()));
-        QCOMPARE(vector.value(QStringLiteral("expected_yencryption_line")).toString(),
-                 QStringLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
-                     + vector.value(QStringLiteral("salt_hex")).toString()
-                     + QStringLiteral(" index=") + vector.value(QStringLiteral("expected_index_hex")).toString()
-                     + QStringLiteral(" tag=") + vector.value(QStringLiteral("expected_tag_hex")).toString());
+        // Produced-line check (NGPOST-TESTS-01): run Yenc::encodeArticle for this
+        // vector's geometry and assert the =yencryption line it produces equals
+        // expected_yencryption_line, with the tag taken from the actually-computed
+        // encrypted.tag above. FF1 is deterministic, so re-encrypting the plain
+        // block built around that produced line must reproduce encodeArticle's
+        // wire byte-for-byte, pinning the line inside the produced article.
+        {
+            const quint32 partNumber = static_cast<quint32>(aadObj.value(QStringLiteral("part_number")).toInt());
+            const quint64 segmentBytes = aadObj.value(QStringLiteral("segment_bytes")).toVariant().toULongLong();
+            const quint32 partBegin = static_cast<quint32>(aadObj.value(QStringLiteral("part_begin")).toInt());
+            const bool singlePart = (segmentBytes == static_cast<quint64>(plaintext.size()))
+                    && (plaintext.size() == 0 || partBegin == 1);
+            const quint32 totalParts = singlePart ? 1 : partNumber;
+            const qint64 filePosition = singlePart ? 0 : static_cast<qint64>(partBegin - 1);
+            const qint64 fileSize = singlePart ? static_cast<qint64>(plaintext.size())
+                                              : filePosition + static_cast<qint64>(plaintext.size());
+            // Line 1 carries the salt raw, so a wire salt must be in the FF1 alphabet;
+            // body-vec-04's salt (0102...0f10, contains 0x0A/0x0D) is primitive-level
+            // only and has no valid wire article, so it is skipped here.
+            const QByteArray salt = QByteArray::fromHex(vector.value(QStringLiteral("salt_hex")).toString().toLatin1());
+            bool wireSalt = salt.size() == 16;
+            for(char byte : salt)
+                wireSalt = wireSalt && FF1Cipher::isAlphabetByte(static_cast<uchar>(byte));
+            if(wireSalt)
+            {
+                YencEncryptionContext context(key, salt, segmentIndex);
+                QByteArray article;
+                quint32 wireCrc = 0;
+                QString articleError;
+                QVERIFY2(Yenc::encodeArticle(plaintext, partNumber, totalParts, fileSize, filePosition,
+                                              nameBytes, context, article, wireCrc, &articleError),
+                         qPrintable(articleError));
+                const QString producedLine = QStringLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=")
+                        + QString::fromLatin1(salt.toHex())
+                        + QStringLiteral(" index=")
+                        + QStringLiteral("%1").arg(segmentIndex, 8, 16, QLatin1Char('0'))
+                        + QStringLiteral(" tag=") + QString::fromLatin1(encrypted.tag.toHex());
+                QCOMPARE(producedLine, vector.value(QStringLiteral("expected_yencryption_line")).toString());
+
+                // Rebuild the plain block encodeArticle must have produced: same
+                // =ybegin/=ypart framing and yEnc body over the computed ciphertext.
+                QByteArray plainBlock;
+                if(singlePart)
+                    plainBlock = QByteArrayLiteral("=ybegin line=128 size=") + QByteArray::number(fileSize)
+                            + QByteArrayLiteral(" name=") + nameBytes + QByteArrayLiteral("\r\n");
+                else
+                    plainBlock = QByteArrayLiteral("=ybegin part=") + QByteArray::number(partNumber)
+                            + QByteArrayLiteral(" total=") + QByteArray::number(totalParts)
+                            + QByteArrayLiteral(" line=128 size=") + QByteArray::number(fileSize)
+                            + QByteArrayLiteral(" name=") + nameBytes + QByteArrayLiteral("\r\n")
+                            + QByteArrayLiteral("=ypart begin=") + QByteArray::number(filePosition + 1)
+                            + QByteArrayLiteral(" end=") + QByteArray::number(filePosition + plaintext.size())
+                            + QByteArrayLiteral("\r\n");
+                plainBlock += producedLine.toLatin1() + QByteArrayLiteral("\r\n");
+                const qint64 maxEncoded = static_cast<qint64>(encrypted.ciphertext.size()) * 2
+                        + (static_cast<qint64>(encrypted.ciphertext.size()) / 32) + 64;
+                QByteArray encoded(static_cast<int>(maxEncoded), Qt::Uninitialized);
+                quint32 rebuiltCrc = 0;
+                const qint64 encodedSize = Yenc::encode(encrypted.ciphertext.constData(), encrypted.ciphertext.size(),
+                                                        reinterpret_cast<uchar *>(encoded.data()), rebuiltCrc);
+                QVERIFY(encodedSize > 0);
+                QCOMPARE(rebuiltCrc, wireCrc);
+                encoded.resize(static_cast<int>(encodedSize - 1));
+                plainBlock += encoded;
+                if(!encoded.isEmpty() && !encoded.endsWith("\r\n"))
+                    plainBlock += QByteArrayLiteral("\r\n");
+                plainBlock += QByteArrayLiteral("=yend size=") + QByteArray::number(encrypted.ciphertext.size());
+                if(singlePart)
+                    plainBlock += QByteArrayLiteral(" crc32=");
+                else
+                    plainBlock += QByteArrayLiteral(" part=") + QByteArray::number(partNumber)
+                            + QByteArrayLiteral(" pcrc32=");
+                plainBlock += QByteArray::number(wireCrc, 16).rightJustified(8, '0') + QByteArrayLiteral("\r\n");
+
+                QByteArray reEncrypted;
+                QVERIFY2(FF1Cipher::encryptControlLines(plainBlock, key, segmentIndex, salt,
+                                                        reEncrypted, &articleError),
+                         qPrintable(articleError));
+                QCOMPARE(reEncrypted, article);
+                QCOMPARE(article.left(16), salt);
+            }
+        }
 
         QByteArray restored;
         QVERIFY2(testDecryptBody(encrypted.ciphertext, encrypted.tag, key, segmentIndex, expectedAad, restored, &error),
@@ -372,6 +456,84 @@ void CryptoTest::vendoredIndexAllocationVectors()
         QVERIFY(allocator.next(assigned));
         QCOMPARE(assigned, static_cast<quint32>(vector.value(QStringLiteral("expected_assigned_index")).toInt()));
     }
+}
+
+void CryptoTest::encryptControlLinesDotStuffsLeadingDot()
+{
+    // Control Std Section 9 / RFC 3977 3.1.1: FF1Cipher::encryptControlLines
+    // prepends '.' when an encrypted control line starts with '.'. Search
+    // segment indices deterministically until some control line's ciphertext
+    // starts with '.', then assert the wire carries the stuffed '..'.
+    const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
+    QByteArray masterKey;
+    QString error;
+    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), salt, masterKey, &error), qPrintable(error));
+
+    const QByteArray plainBlock = QByteArrayLiteral("=ybegin line=128 size=4 name=file.bin\r\n")
+            + QByteArrayLiteral("=yencryption cipher=XChaCha20-Poly1305 salt=") + salt.toHex()
+            + QByteArrayLiteral(" index=00000001 tag=24d9229edfc04aeaeedcf105bc91e695\r\n")
+            + QByteArrayLiteral("data\r\n=yend size=4\r\n");
+
+    // Pinned deterministic case (found by the same search, then frozen):
+    // segmentIndex 22 makes the =yend control line's FF1 ciphertext start
+    // with '.' (0x2E). Pin it explicitly so the leading-dot case is
+    // exercised by construction, not only if the search below happens to
+    // find one; the search remains as a cross-check over other indices.
+    {
+        QByteArray raw;
+        QVERIFY2(FF1Cipher::encryptLine(QByteArrayLiteral("=yend size=4"), masterKey, 22,
+                                        4, salt, raw, &error),
+                 qPrintable(error));
+        QVERIFY2(raw.startsWith('.'),
+                 qPrintable(QStringLiteral("pinned segmentIndex 22 =yend ciphertext no longer "
+                                           "starts with '.': %1").arg(QString::fromLatin1(raw.left(8).toHex()))));
+        QByteArray wire;
+        QVERIFY2(FF1Cipher::encryptControlLines(plainBlock, masterKey, 22, salt, wire, &error),
+                 qPrintable(error));
+        QVERIFY2(wire.contains(QByteArrayLiteral("..") + raw.mid(1)),
+                 "wire does not contain the dot-stuffed '..' form of the '.'-initial =yend ciphertext");
+    }
+
+    bool found = false;
+    for(quint32 segmentIndex = 1; segmentIndex < 512 && !found; ++segmentIndex)
+    {
+        // encryptLine gives the unstuffed ciphertext for each control line.
+        // Note: an FF1 ciphertext may itself contain 0x0A, so wire lines are
+        // recovered by expected lengths rather than by splitting on '\n'.
+        const QList<QByteArray> plainLines = plainBlock.split('\n');
+        QByteArray wire;
+        QVERIFY2(FF1Cipher::encryptControlLines(plainBlock, masterKey, segmentIndex, salt, wire, &error),
+                 qPrintable(error));
+        int offset = 0;
+        for(int i = 0; i < plainLines.size() - 1; ++i)
+        {
+            QByteArray plainContent = plainLines.at(i);
+            if(plainContent.endsWith('\r'))
+                plainContent.chop(1);
+            const bool isControl = plainContent.startsWith("=y");
+            if(!isControl)
+            {
+                const int len = plainLines.at(i).size() + 1; // content + CR + LF, minus split '\n'
+                QCOMPARE(wire.mid(offset, plainLines.at(i).size()), plainLines.at(i));
+                offset += len;
+                continue;
+            }
+            QByteArray raw;
+            QVERIFY2(FF1Cipher::encryptLine(plainContent, masterKey, segmentIndex,
+                                            static_cast<quint32>(i + 1), salt, raw, &error),
+                     qPrintable(error));
+            const QByteArray expectedWire = raw.startsWith('.') ? QByteArrayLiteral(".") + raw : raw;
+            QCOMPARE(wire.mid(offset, expectedWire.size()), expectedWire);
+            if(raw.startsWith('.'))
+            {
+                QVERIFY(expectedWire.startsWith(".."));
+                found = true;
+            }
+            offset += expectedWire.size() + 2; // plus the preserved CRLF ending
+        }
+        QCOMPARE(offset, wire.size());
+    }
+    QVERIFY2(found, "no leading-dot control ciphertext found in searched segment indices");
 }
 
 QTEST_GUILESS_MAIN(CryptoTest)

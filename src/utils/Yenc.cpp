@@ -160,6 +160,7 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
     article.clear();
     wireCrc32 = 0;
     if(part == 0 || totalParts == 0 || part > totalParts || fileSize < 0 || filePosition < 0
+            || fileName.isEmpty()
             || plaintext.size() > std::numeric_limits<qint64>::max() - filePosition
             || filePosition + plaintext.size() > fileSize)
     {

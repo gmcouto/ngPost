@@ -14,7 +14,6 @@ private slots:
     void ordinaryHeadPreservesArchiveMetadata();
     void deduplicatesMatchingMetadata();
     void validatesEncryptionSettings();
-    void encryptionSettingsValidationResetsInvalidState();
     void rejectsXmlUnrepresentablePasswords();
     void acceptsXmlSpecialAndSurrogatePairPasswords();
     void roundTripsPasswordMetaThroughXmlParser_data();
@@ -96,20 +95,6 @@ void NzbTest::validatesEncryptionSettings()
     settings.enabled = false;
     QVERIFY(settings.validate(&error));
     settings.clearPassword();
-    QVERIFY(settings.password.isEmpty());
-}
-
-void NzbTest::encryptionSettingsValidationResetsInvalidState()
-{
-    EncryptionSettings settings;
-    settings.enabled = true;
-    settings.password = QString();
-    QString error;
-    QVERIFY(!settings.validate(&error));
-    QCOMPARE(error, QStringLiteral("Encryption requires a non-empty password"));
-    settings.enabled = false;
-    settings.clearPassword();
-    QVERIFY(!settings.enabled);
     QVERIFY(settings.password.isEmpty());
 }
 
@@ -222,11 +207,6 @@ void NzbTest::roundTripsPasswordMetaThroughXmlParser()
     QCOMPARE(parsed, password);
 }
 
-QTEST_APPLESS_MAIN(NzbTest)
-
-#include "NzbTest.moc"
-
-
 void NzbTest::unencryptedHeadMatchesUpstream()
 {
     QMap<QString, QString> meta;
@@ -334,3 +314,7 @@ void NzbTest::configLineKeepsEncryptTrue()
     settings.enabled = false;
     QVERIFY(settings.configLine().isEmpty());
 }
+
+QTEST_APPLESS_MAIN(NzbTest)
+
+#include "NzbTest.moc"

@@ -18,6 +18,7 @@
 //========================================================================
 
 #include "PostingJob.h"
+#include "crypto/CryptoEngine.h"
 #include "NgPost.h"
 #include "NntpConnection.h"
 #include "nntp/NntpServerParams.h"

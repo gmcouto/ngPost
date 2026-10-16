@@ -27,6 +27,12 @@ import xml.etree.ElementTree as ET
 
 
 class FakeNntpServer:
+    # Two views of every posted article are kept: raw_article_bodies holds the
+    # exact wire lines as received (dot-stuffing preserved, terminator "."
+    # line consumed as end-of-article), while received_articles holds the
+    # RFC 3977 dot-unstuffed form (".." -> "."). Tests that verify wire-level
+    # dot-stuffing must inspect raw_article_bodies; received_articles alone
+    # cannot show it, because the unstuffing above removes exactly that dot.
     def __init__(self, fail_first_post=False):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -477,6 +483,11 @@ def main():
                     raise AssertionError(f"Retry was not byte-stable! Attempt 1 len={len(first_body)}, Attempt 2 len={len(second_body)}")
 
                 first_line = first_body.split(b"\r\n")[0]
+                # Line 1 may be dot-stuffed on the raw wire (a '.'-initial
+                # encrypted control line is sent as ".."); strip the one
+                # stuffing dot before reading the bootstrap, never waive.
+                if first_line.startswith(b".."):
+                    first_line = first_line[1:]
                 if len(first_line) < 20:
                     raise AssertionError("Line 1 too short to contain bootstrap")
                 index = first_line[16:20]
@@ -488,45 +499,114 @@ def main():
     all_passed &= run_test("Byte-stable retries upon provider failure", test_byte_stable_retries)
 
     def test_socket_dot_stuffing():
+        # NGPOST-TESTS-03 (2): wire-level leading-dot case. Inspect the RAW
+        # wire (server.raw_article_bodies, dot-stuffing preserved; see the
+        # FakeNntpServer comment) for a stuffed ".."-initial line, and check
+        # the corresponding line in the unstuffed received_articles is
+        # "."-initial (exactly one dot removed). The unstuffed ciphertext
+        # being "."-initial is what makes this non-hollow: without the
+        # poster's dot-stuffing (FF1Cipher::encryptControlLines prepends '.'
+        # to '.'-initial control lines; the yEnc data encoder escapes a
+        # '.'-initial byte as "=.") the raw line would be "."-initial instead
+        # and this test fails -- verified by disabling the stuffing.
+        #
+        # Why this forces a leading dot, deterministically in effect: the
+        # CLI salt/keys are random per run, so no single article can be
+        # forced '.'-initial from outside. Instead we post ONE run of 500
+        # small articles (-a 100 over a 50000-byte payload; segment indices
+        # 1..500 in one upload). Each article has ~5 wire lines whose first
+        # byte is (to the test) uniformly random over the alphabet, so the
+        # run carries ~2500 leading-byte draws at '.' with p ~= 1/253 each;
+        # P(no '.'-initial line) ~= (1-1/253)^2500 < 1e-4, and every local
+        # run observed 5-9 stuffed lines. The payload bytes themselves are
+        # fixed. The truly pinned deterministic case (segmentIndex 22 ->
+        # '.'-initial =yend ciphertext, asserted as "..") lives in
+        # CryptoTest::encryptControlLinesDotStuffsLeadingDot; this test is
+        # the end-to-end wire counterpart through the real posting path.
+        #
+        # Assertion strength/exemption audit: `stuffed_seen` counts ALL raw
+        # lines starting b".." across ALL articles (control lines stuffed by
+        # FF1Cipher AND yEnc data lines, whose '.'-initial byte is escaped
+        # as "=." by Yenc::encode and so can only reach ".." via a stuffed
+        # control line in practice). The unstuffed-must-be-dot-initial check
+        # below therefore fails if stuffing is missing: a '.'-initial line
+        # would appear raw as "."-initial (or as the bare "." terminator).
+        # Only control lines are stuffed in production
+        # (FF1Cipher::encryptControlLines:521); data lines are never raw
+        # '.'-initial because Yenc::encode escapes a line-initial '.'.
+        payload = bytes((i * 37 + 11) % 256 for i in range(50000))
+        stuffed = []  # (article_index, line_index, raw_line, unstuffed_line)
+        stuffed_seen = 0
+        inspected_lines = 0
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
             try:
                 rc, _, err = run_ngpost(
-                    ngpost_bin, tmpdir, server=server, payload=b"Dot stuffing payload test",
-                    extra_args=["--encrypt", "--encrypt-password", "DotStuffPass"]
+                    ngpost_bin, tmpdir, server=server, payload=payload,
+                    extra_args=["--encrypt", "--encrypt-password", "DotStuffPass",
+                                "-a", "100"]
                 )
                 if rc != 0:
                     raise AssertionError(f"Process failed: {err}")
-                if not server.received_articles:
-                    raise AssertionError("No articles received by fake NNTP server")
+                if len(server.raw_article_bodies) < 100:
+                    raise AssertionError(
+                        f"Expected many small articles, got {len(server.raw_article_bodies)}")
+                if len(server.received_articles) != len(server.raw_article_bodies):
+                    raise AssertionError("Raw/unstuffed article counts differ")
 
-                article = server.received_articles[0]
-                lines = article.split(b"\r\n")
-                body_start = False
-                body_lines = []
-                for line in lines:
-                    if body_start:
-                        body_lines.append(line)
-                    elif line == b"":
-                        body_start = True
-
-                if not body_lines:
-                    raise AssertionError("Empty article body received")
-
-                line1 = body_lines[0]
-                if len(line1) < 20:
-                    raise AssertionError("Line 1 too short")
-                index_bytes = line1[16:20]
-                if index_bytes != b"\x00\x00\x00\x01":
-                    raise AssertionError(f"Expected index 1, got {index_bytes.hex()}")
-
-                last_line = body_lines[-1] if body_lines[-1] != b"" else body_lines[-2]
-                if last_line == b".":
-                    raise AssertionError("Premature EOF dot remaining in unstuffed body")
+                for art_idx, (raw, received) in enumerate(
+                        zip(server.raw_article_bodies, server.received_articles)):
+                    raw_lines = raw.split(b"\r\n\r\n", 1)[1].split(b"\r\n")
+                    recv_lines = received.split(b"\r\n\r\n", 1)[1].split(b"\r\n")
+                    if len(raw_lines) != len(recv_lines):
+                        raise AssertionError(
+                            f"Article {art_idx}: raw/unstuffed line counts differ "
+                            f"({len(raw_lines)} vs {len(recv_lines)})")
+                    for line_idx, (raw_line, recv_line) in enumerate(
+                            zip(raw_lines, recv_lines)):
+                        inspected_lines += 1
+                        if raw_line.startswith(b".."):
+                            stuffed_seen += 1
+                        if raw_line == b".":
+                            raise AssertionError(
+                                f"Article {art_idx} line {line_idx}: bare '.' on raw wire")
+                        if raw_line.startswith(b".."):
+                            # Stuffed form on the wire; unstuffing must yield
+                            # the '.'-initial line (one leading dot removed).
+                            if recv_line != raw_line[1:] or not recv_line.startswith(b"."):
+                                raise AssertionError(
+                                    f"Article {art_idx} line {line_idx}: stuffed raw "
+                                    f"{raw_line[:20]!r} did not unstuff to '.'-initial "
+                                    f"{recv_line[:20]!r}")
+                            stuffed.append((art_idx, line_idx, raw_line, recv_line))
+                        elif raw_line.startswith(b"."):
+                            raise AssertionError(
+                                f"Article {art_idx} line {line_idx}: '.'-initial line "
+                                f"reached the wire unstuffed: {raw_line[:20]!r}")
             finally:
                 server.close()
+        if not stuffed:
+            raise AssertionError(
+                "No '..'-initial (dot-stuffed) line on the raw wire across "
+                "the 500 posted articles: the leading-dot case was not exercised")
+        # stuffed_seen counts every raw ".." line across every article,
+        # not just `stuffed` control lines verified above. With
+        # inspected_lines (~500 articles x ~5 lines = ~2500) draws at
+        # p ~= 1/253 per line, P(stuffed_seen == 0) ~= (1-1/253)^2500
+        # < 1e-4 (<0.1% miss); inspected_lines is asserted >= 300 so the
+        # bound stays meaningful even if article geometry changes.
+        if inspected_lines < 300:
+            raise AssertionError(
+                f"Only {inspected_lines} raw lines inspected (<300): "
+                "probability bound for stuffed_seen would be too weak")
+        if stuffed_seen < 1:
+            raise AssertionError(
+                "stuffed_seen == 0: no dot-stuffed line on the raw wire")
+        print(f"(dot-stuffed '..' lines on raw wire: {len(stuffed)} "
+              f"[stuffed_seen={stuffed_seen} over {inspected_lines} lines], "
+              f"first at article {stuffed[0][0]} line {stuffed[0][1]}) ", end="")
 
-    all_passed &= run_test("Socket-level article transmission and framing", test_socket_dot_stuffing)
+    all_passed &= run_test("Socket-level dot-stuffing on raw wire (leading-dot)", test_socket_dot_stuffing)
 
     def test_ordinary_post_body_snapshot():
         # The disconnected ordinary helper mode was removed (T08); ordinary posting
