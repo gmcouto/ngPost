@@ -218,5 +218,6 @@ bool CryptoEngine::encryptBody(const QByteArray &plaintext, const QByteArray &ke
     result.ciphertext = sealed.left(plaintext.size());
     result.tag = sealed.right(TagSize);
     sodium_memzero(sealed.data(), static_cast<size_t>(sealed.size()));
+    sodium_memzero(nonce.data(), static_cast<size_t>(nonce.size()));
     return true;
 }

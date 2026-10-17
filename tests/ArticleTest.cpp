@@ -42,9 +42,12 @@ void ArticleTest::encryptedSinglePartUsesStrictFraming()
     QCOMPARE(wire.mid(16, 4), QByteArray::fromHex("00000001"));
     QVERIFY(!wire.contains("=ybegin"));
     QVERIFY(!wire.contains("=ypart"));
+    QVERIFY(!wire.contains("=yencryption"));
     QVERIFY(!wire.contains("=yend"));
     const QList<QByteArray> lines = wire.split('\n');
-    QVERIFY(lines.size() >= 3);
+    // 4 lines + trailing empty element after the final CRLF.
+    QCOMPARE(lines.size(), 5);
+    QVERIFY(lines.at(4).isEmpty());
 }
 
 void ArticleTest::encryptedMultipartUsesStrictFraming()
@@ -68,7 +71,9 @@ void ArticleTest::encryptedMultipartUsesStrictFraming()
     QVERIFY(!wire.contains("=ypart"));
     QVERIFY(!wire.contains("=yend"));
     const QList<QByteArray> lines = wire.split('\n');
-    QVERIFY(lines.size() >= 4);
+    // 5 lines + trailing empty element after the final CRLF.
+    QCOMPARE(lines.size(), 6);
+    QVERIFY(lines.at(5).isEmpty());
 }
 
 void ArticleTest::encryptedMultipartFinalPartUsesStrictFraming()
@@ -100,21 +105,24 @@ void ArticleTest::encryptedMultipartFinalPartUsesStrictFraming()
     QVERIFY(!wire.contains("=ypart"));
     QVERIFY(!wire.contains("=yencryption"));
     QVERIFY(!wire.contains("=yend"));
-    // Whole-file crc32= must never appear on an encrypted multipart =yend;
-    // only per-part pcrc32= is allowed (Q-1). It cannot appear literally here
-    // because the =yend line is FF1-encrypted; the exact-structure assertion
-    // below (5 control/data lines, =yend last) plus encodeArticle's branch
-    // (part= token + pcrc32= for multipart) is what this test can pin at the
-    // wire level, and the literal token check guards against a regression
-    // that leaves plaintext control lines unencrypted.
-    QVERIFY(!wire.contains("crc32="));
-    QVERIFY(!wire.contains("pcrc32="));
     const QList<QByteArray> lines = wire.split('\n');
     // 5 lines + trailing empty element after the final CRLF.
     QCOMPARE(lines.size(), 6);
     QVERIFY(lines.at(5).isEmpty());
     for(int i = 0; i < 5; ++i)
         QVERIFY2(lines.at(i).endsWith('\r'), qPrintable(QStringLiteral("line %1 not CR-terminated").arg(i)));
+    // Whole-file crc32= must never appear on an encrypted multipart =yend;
+    // only per-part pcrc32= is allowed (Q-1). The tokens cannot appear
+    // literally here because the =yend line is FF1-encrypted, so pin Q-1 by
+    // the encrypted =yend line length instead: FF1 is length-preserving
+    // (Line 1's +20 bootstrap aside), so "=yend size=16 part=2
+    // pcrc32=<8hex>" (36 chars) encrypts to 36 chars, plus the CR kept by
+    // the '\n' split = 37. A whole-file "=yend size=16 crc32=<8hex>" would
+    // be only 28 chars (+CR). A leading '.' would add one dot-stuffing char
+    // on top of the 36; this vector's ciphertext is not '.'-initial, so the
+    // exact 37 holds (and would fail loudly if the ciphertext changed).
+    QCOMPARE(lines.at(4).size(),
+             QByteArrayLiteral("=yend size=16 part=2 pcrc32=00000000\r").size());
 }
 
 void ArticleTest::segmentIndicesProgressReleaseWide()
@@ -142,28 +150,10 @@ void ArticleTest::segmentIndexAllocatorSkipsForbiddenBytes()
 {
     // Index framing rule: indices whose uint32_be encoding contains 0x0A
     // or 0x0D would split the Line 1 bootstrap on the wire and must be skipped.
-    // Canonical index_allocation.json vectors: candidates 10, 13, 266, 269.
+    // The canonical candidate->assigned cases live in the JSON-driven
+    // CryptoTest::vendoredIndexAllocationVectors; this slot keeps only the
+    // predicate-position and consecutive-crossing checks that suite lacks.
     quint32 segmentIndex = 0;
-
-    // candidate 10 -> assigned 11
-    SegmentIndexAllocator skipTen(10);
-    QVERIFY(skipTen.next(segmentIndex));
-    QCOMPARE(segmentIndex, quint32(11));
-
-    // candidate 13 -> assigned 14
-    SegmentIndexAllocator skipThirteen(13);
-    QVERIFY(skipThirteen.next(segmentIndex));
-    QCOMPARE(segmentIndex, quint32(14));
-
-    // candidate 266 (0x0000010A) -> assigned 267
-    SegmentIndexAllocator skip266(266);
-    QVERIFY(skip266.next(segmentIndex));
-    QCOMPARE(segmentIndex, quint32(267));
-
-    // candidate 269 (0x0000010D) -> assigned 270
-    SegmentIndexAllocator skip269(269);
-    QVERIFY(skip269.next(segmentIndex));
-    QCOMPARE(segmentIndex, quint32(270));
 
     // forbidden byte in any of the four positions
     QVERIFY(SegmentIndexAllocator::hasForbiddenByte(0x0A000000U));

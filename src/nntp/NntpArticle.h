@@ -128,7 +128,7 @@ void NntpArticle::freeMemory()
     _bodySize = 0;
 }
 
-std::string NntpArticle::body() const { return _body ? std::string(_body, static_cast<size_t>(_bodySize)) : std::string(); }
+std::string NntpArticle::body() const { return _body; }
 
 QString NntpArticle::id() const { return _msgId; }
 uint NntpArticle::part() const{ return _part; }

@@ -510,33 +510,29 @@ def main():
         # '.'-initial byte as "=.") the raw line would be "."-initial instead
         # and this test fails -- verified by disabling the stuffing.
         #
-        # Why this forces a leading dot, deterministically in effect: the
-        # CLI salt/keys are random per run, so no single article can be
-        # forced '.'-initial from outside. Instead we post ONE run of 500
-        # small articles (-a 100 over a 50000-byte payload; segment indices
-        # 1..500 in one upload). Each article has ~5 wire lines whose first
-        # byte is (to the test) uniformly random over the alphabet, so the
-        # run carries ~2500 leading-byte draws at '.' with p ~= 1/253 each;
-        # P(no '.'-initial line) ~= (1-1/253)^2500 < 1e-4, and every local
-        # run observed 5-9 stuffed lines. The payload bytes themselves are
-        # fixed. The truly pinned deterministic case (segmentIndex 22 ->
+        # Why this exercises a leading dot in practice: the CLI salt/keys
+        # are random per run, so no single article can be forced '.'-initial
+        # from outside. Instead we post ONE run of 500 small articles
+        # (-a 100 over a 50000-byte payload; segment indices 1..500 in one
+        # upload) and rely on observing stuffed lines in practice (every
+        # local run observed 5-9). That observation is not a tight
+        # probability bound: Line 1 of every article begins with the same
+        # per-upload salt byte (one draw per upload, not 500), and the FF1
+        # first bytes are deterministic functions of salt/key/index, not
+        # independent uniform draws. The payload bytes themselves are fixed.
+        # The truly pinned deterministic case (segmentIndex 22 ->
         # '.'-initial =yend ciphertext, asserted as "..") lives in
         # CryptoTest::encryptControlLinesDotStuffsLeadingDot; this test is
         # the end-to-end wire counterpart through the real posting path.
         #
-        # Assertion strength/exemption audit: `stuffed_seen` counts ALL raw
-        # lines starting b".." across ALL articles (control lines stuffed by
-        # FF1Cipher AND yEnc data lines, whose '.'-initial byte is escaped
-        # as "=." by Yenc::encode and so can only reach ".." via a stuffed
-        # control line in practice). The unstuffed-must-be-dot-initial check
-        # below therefore fails if stuffing is missing: a '.'-initial line
-        # would appear raw as "."-initial (or as the bare "." terminator).
-        # Only control lines are stuffed in production
-        # (FF1Cipher::encryptControlLines:521); data lines are never raw
-        # '.'-initial because Yenc::encode escapes a line-initial '.'.
+        # Assertion strength: the unstuffed-must-be-dot-initial check below
+        # fails if stuffing is missing: a '.'-initial line would appear raw
+        # as "."-initial (or as the bare "." terminator). Only control lines
+        # are stuffed in production (FF1Cipher::encryptControlLines); data
+        # lines are never raw '.'-initial because Yenc::encode escapes a
+        # line-initial '.' as "=.".
         payload = bytes((i * 37 + 11) % 256 for i in range(50000))
         stuffed = []  # (article_index, line_index, raw_line, unstuffed_line)
-        stuffed_seen = 0
         inspected_lines = 0
         with tempfile.TemporaryDirectory() as tmpdir:
             server = FakeNntpServer()
@@ -565,8 +561,6 @@ def main():
                     for line_idx, (raw_line, recv_line) in enumerate(
                             zip(raw_lines, recv_lines)):
                         inspected_lines += 1
-                        if raw_line.startswith(b".."):
-                            stuffed_seen += 1
                         if raw_line == b".":
                             raise AssertionError(
                                 f"Article {art_idx} line {line_idx}: bare '.' on raw wire")
@@ -589,21 +583,14 @@ def main():
             raise AssertionError(
                 "No '..'-initial (dot-stuffed) line on the raw wire across "
                 "the 500 posted articles: the leading-dot case was not exercised")
-        # stuffed_seen counts every raw ".." line across every article,
-        # not just `stuffed` control lines verified above. With
-        # inspected_lines (~500 articles x ~5 lines = ~2500) draws at
-        # p ~= 1/253 per line, P(stuffed_seen == 0) ~= (1-1/253)^2500
-        # < 1e-4 (<0.1% miss); inspected_lines is asserted >= 300 so the
-        # bound stays meaningful even if article geometry changes.
+        # Keep the inspected-lines floor so the observation above stays
+        # meaningful even if article geometry changes.
         if inspected_lines < 300:
             raise AssertionError(
                 f"Only {inspected_lines} raw lines inspected (<300): "
-                "probability bound for stuffed_seen would be too weak")
-        if stuffed_seen < 1:
-            raise AssertionError(
-                "stuffed_seen == 0: no dot-stuffed line on the raw wire")
+                "too few lines for the dot-stuffing observation")
         print(f"(dot-stuffed '..' lines on raw wire: {len(stuffed)} "
-              f"[stuffed_seen={stuffed_seen} over {inspected_lines} lines], "
+              f"over {inspected_lines} lines, "
               f"first at article {stuffed[0][0]} line {stuffed[0][1]}) ", end="")
 
     all_passed &= run_test("Socket-level dot-stuffing on raw wire (leading-dot)", test_socket_dot_stuffing)

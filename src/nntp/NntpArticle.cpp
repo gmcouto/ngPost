@@ -75,7 +75,6 @@ bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encry
         delete[] yencBody;
 
         std::string body = ss.str();
-        _bodySize = static_cast<qint64>(body.length());
         _body = new char[body.length()+1];
         std::strcpy(_body, body.c_str());
         return true;
