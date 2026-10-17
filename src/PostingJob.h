@@ -263,8 +263,9 @@ public:
             stream << tab << "<head>\n";
             for (auto itMeta = meta.cbegin(); itMeta != meta.cend(); ++itMeta)
             {
-                if (itMeta.key() == QStringLiteral("password") || itMeta.key() == QStringLiteral("yenc_encrypted")
-                        || itMeta.key() == QStringLiteral("yenc_version") || itMeta.key() == QStringLiteral("yenc_cipher"))
+                const QString metaKey = itMeta.key().toLower();
+                if (metaKey == QStringLiteral("password") || metaKey == QStringLiteral("yenc_encrypted")
+                        || metaKey == QStringLiteral("yenc_version") || metaKey == QStringLiteral("yenc_cipher"))
                     continue; // Emitted authoritatively below, or omitted (optional fields whose user values could contradict actual v1.2 content)
                 stream << tab << tab << "<meta type=\"" << itMeta.key() << "\">" << itMeta.value() << "</meta>\n";
             }

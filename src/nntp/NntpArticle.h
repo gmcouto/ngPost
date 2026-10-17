@@ -47,6 +47,7 @@ private:
     NntpFile  *_nntpFile; //!< original file
     const uint _part;     //!< part of the original file
     const quint32 _segmentIndex;
+    bool _encrypted; //!< body was built by the encrypted encodeArticle path
     QUuid      _id;       //!< to generate a unique Message-ID for the Header
 
     const std::string *_from;    //!< NNTP header From (owned by PostingJob)
@@ -128,7 +129,14 @@ void NntpArticle::freeMemory()
     _bodySize = 0;
 }
 
-std::string NntpArticle::body() const { return _body; }
+std::string NntpArticle::body() const
+{
+    if (!_body)
+        return std::string();
+    if (_encrypted)
+        return std::string(_body, static_cast<size_t>(_bodySize));
+    return std::string(_body);
+}
 
 QString NntpArticle::id() const { return _msgId; }
 uint NntpArticle::part() const{ return _part; }

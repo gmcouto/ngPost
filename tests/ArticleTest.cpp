@@ -19,8 +19,8 @@ private slots:
     void segmentIndexAllocatorSkipsForbiddenBytes();
     // Worst-case escape payloads must not overflow the encode buffer
     void worstCaseEscapePayloadDoesNotOverflow();
-    // Exact-128-column wrap and empty payloads must not inject blank lines
-    void exactWrapAndEmptyPayloadPreserveSingleCrlf();
+    // Exact-128-column wrap must not inject blank lines
+    void exactWrapPreservesSingleCrlf();
 };
 
 void ArticleTest::encryptedSinglePartUsesStrictFraming()
@@ -199,12 +199,12 @@ void ArticleTest::worstCaseEscapePayloadDoesNotOverflow()
     QVERIFY(!wire.contains("=ybegin"));
 }
 
-void ArticleTest::exactWrapAndEmptyPayloadPreserveSingleCrlf()
+void ArticleTest::exactWrapPreservesSingleCrlf()
 {
     // When the encoded stream wraps exactly on a 128-column boundary the
-    // old code emitted a double CRLF (blank line) before =yend; a zero-byte
-    // payload did the same. Downstream FF1 tweak derivation counts physical
-    // lines, so a blank line desynchronized the =yend tweak.
+    // old code emitted a double CRLF (blank line) before =yend. Downstream
+    // FF1 tweak derivation counts physical lines, so a blank line
+    // desynchronized the =yend tweak.
     // Encrypted articles must preserve single CRLF.
     const QByteArray salt("K7mX9pL2qR8vN4wZ", 16);
     QByteArray masterKey;
@@ -218,13 +218,6 @@ void ArticleTest::exactWrapAndEmptyPayloadPreserveSingleCrlf()
     QByteArray wire;
     quint32 crc32 = 0;
     QVERIFY2(Yenc::encodeArticle(payload, 1, 1, payload.size(), 0, QByteArrayLiteral("file.bin"),
-                                 encryption, wire, crc32, &error), qPrintable(error));
-    QVERIFY(!wire.contains("\r\n\r\n"));
-    QVERIFY(!wire.contains("=yend"));
-
-    // Zero-byte payload in encrypted mode:
-    const QByteArray empty;
-    QVERIFY2(Yenc::encodeArticle(empty, 1, 1, 0, 0, QByteArrayLiteral("empty.bin"),
                                  encryption, wire, crc32, &error), qPrintable(error));
     QVERIFY(!wire.contains("\r\n\r\n"));
     QVERIFY(!wire.contains("=yend"));

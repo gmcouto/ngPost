@@ -78,6 +78,7 @@ private slots:
     void fullArticlePreservesDataAndFraming();
     void generatedSaltsAreUsable();
     // Missing =yencryption header must be rejected in both directions
+    void rejectsInvalidSaltOnNonLine1();
     void rejectsMissingEncryptionHeader();
     // Vendored canonical conformance vectors
     void vendoredArgon2idVectors();
@@ -182,6 +183,41 @@ void CryptoTest::generatedSaltsAreUsable()
     for(char value : first)
         QVERIFY(FF1Cipher::isAlphabetByte(static_cast<uchar>(value)));
     QCOMPARE(CryptoEngine::generateSalt().size(), 16);
+}
+
+void CryptoTest::rejectsInvalidSaltOnNonLine1()
+{
+    // NP12-05: salt validation must not be skipped for lineIndex != 1. The
+    // salt is only *prepended* on Line 1, but a malformed salt on any line
+    // signals a broken upload session and must be rejected, not ignored.
+    const QByteArray goodSalt("K7mX9pL2qR8vN4wZ", 16);
+    QByteArray masterKey;
+    QString error;
+    QVERIFY2(CryptoEngine::deriveKey(QStringLiteral("test123"), goodSalt, masterKey, &error),
+             qPrintable(error));
+    const QByteArray plaintext = QByteArrayLiteral("=yend size=4");
+
+    // Wrong size on a non-Line-1 line.
+    const QByteArray shortSalt("K7mX9pL2qR8vN4w", 15);
+    QByteArray wire;
+    QString saltError;
+    QVERIFY(!FF1Cipher::encryptLine(plaintext, masterKey, 1, 4, shortSalt, wire, &saltError));
+    QVERIFY(wire.isEmpty());
+    QVERIFY(!saltError.isEmpty());
+
+    // Right size but a byte outside the Radix 253 alphabet (0x00) on line 2.
+    QByteArray badAlphabetSalt = goodSalt;
+    badAlphabetSalt[3] = '\0';
+    QVERIFY(!FF1Cipher::encryptLine(plaintext, masterKey, 1, 2, badAlphabetSalt, wire, &saltError));
+    QVERIFY(wire.isEmpty());
+    QVERIFY(!saltError.isEmpty());
+
+    // Control: the same plaintext/line with the valid salt still encrypts,
+    // and carries no salt prefix on a non-Line-1 line.
+    QVERIFY2(FF1Cipher::encryptLine(plaintext, masterKey, 1, 4, goodSalt, wire, &error),
+             qPrintable(error));
+    QCOMPARE(wire.size(), plaintext.size());
+    QVERIFY(!wire.startsWith(goodSalt));
 }
 
 void CryptoTest::rejectsMissingEncryptionHeader()

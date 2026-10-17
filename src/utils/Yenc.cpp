@@ -189,17 +189,17 @@ bool Yenc::encodeArticle(const QByteArray &plaintext, quint32 part, quint32 tota
             + QByteArrayLiteral(" index=") + indexHex
             + QByteArrayLiteral(" tag=") + encrypted.tag.toHex();
 
-    if(wirePayload.size() > (std::numeric_limits<int>::max() - 4) / 2)
-    {
-        setError(error, QStringLiteral("yEnc article payload is too large"));
-        return false;
-    }
     // Worst-case encoded size accounts for per-byte escape expansion
     // (up to 2x), CRLF line terminators emitted every maxwidth (128) encoded
     // columns (up to size/32 additional bytes for fully escaped payloads),
     // and the trailing '\0' written by encode().
     const qint64 maxEncoded = static_cast<qint64>(wirePayload.size()) * 2
                             + (static_cast<qint64>(wirePayload.size()) / 32) + 64;
+    if(maxEncoded > std::numeric_limits<int>::max())
+    {
+        setError(error, QStringLiteral("yEnc article payload is too large"));
+        return false;
+    }
     QByteArray encoded(static_cast<int>(maxEncoded), Qt::Uninitialized);
     const qint64 encodedSize = encode(wirePayload.constData(), wirePayload.size(),
                                       reinterpret_cast<uchar *>(encoded.data()), wireCrc32);

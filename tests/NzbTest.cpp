@@ -20,6 +20,7 @@ private slots:
     void roundTripsPasswordMetaThroughXmlParser();
     void unencryptedHeadMatchesUpstream();
     void encryptedHeadOmitsProtocolVersionAndCipherMetadata();
+    void encryptedHeadSuppressesReservedMetaCaseInsensitively();
     void ordinaryHeadPreservesArbitraryVersionAndCipherMetadata();
     void rejectsEncryptedFileSizeOverflow();
     void configLineKeepsEncryptTrue();
@@ -282,6 +283,33 @@ void NzbTest::encryptedHeadOmitsProtocolVersionAndCipherMetadata()
     QVERIFY(emptyXml.contains(QStringLiteral("<meta type=\"password\">myPass</meta>")));
     QVERIFY(!emptyXml.contains(QStringLiteral("yenc_version")));
     QVERIFY(!emptyXml.contains(QStringLiteral("yenc_cipher")));
+}
+
+void NzbTest::encryptedHeadSuppressesReservedMetaCaseInsensitively()
+{
+    // NP12-04: reserved keys are suppressed in the encrypted head regardless
+    // of case, so "-m Password=..." cannot emit a second password meta and
+    // "-m YENC_VERSION=0.1" cannot contradict the actual v1.2 content.
+    QMap<QString, QString> meta;
+    meta.insert(QStringLiteral("Password"), QStringLiteral("user-pass"));
+    meta.insert(QStringLiteral("YENC_ENCRYPTED"), QStringLiteral("false"));
+    meta.insert(QStringLiteral("YENC_VERSION"), QStringLiteral("0.1"));
+    meta.insert(QStringLiteral("Yenc_Cipher"), QStringLiteral("AES-GCM"));
+    meta.insert(QStringLiteral("category"), QStringLiteral("test"));
+
+    QString xml;
+    QTextStream stream(&xml);
+    QString error;
+    QVERIFY(PostingJob::writeNzbHead(stream, QStringLiteral("  "), meta,
+                                     QString(), true, QStringLiteral("transport"), &error));
+    QCOMPARE(xml.toLower().count(QStringLiteral("type=\"password\"")), 1);
+    QCOMPARE(xml.toLower().count(QStringLiteral("type=\"yenc_encrypted\"")), 1);
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"yenc_encrypted\">true</meta>")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"password\">transport</meta>")));
+    QVERIFY(!xml.contains(QStringLiteral("yenc_version"), Qt::CaseInsensitive));
+    QVERIFY(!xml.contains(QStringLiteral("yenc_cipher"), Qt::CaseInsensitive));
+    QVERIFY(!xml.contains(QStringLiteral("user-pass")));
+    QVERIFY(xml.contains(QStringLiteral("<meta type=\"category\">test</meta>")));
 }
 
 void NzbTest::ordinaryHeadPreservesArbitraryVersionAndCipherMetadata()

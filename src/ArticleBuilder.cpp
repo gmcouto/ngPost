@@ -54,12 +54,14 @@ NntpArticle *ArticleBuilder::getNextArticle(const QString &threadName)
         const YencEncryptionContext *encryptionPtr = _job->_encryptionEnabled ? &encryption : nullptr;
         if(!article->yEncBody(_buffer, encryptionPtr, &error))
         {
+            QString encryptionError;
             _job->_secureDiskAccess.lock();
             article->nntpFile()->removeArticle(article);
             _job->_encryptionError = QStringLiteral("Unable to encode article: %1").arg(error);
+            encryptionError = _job->_encryptionError;
             _job->_secureDiskAccess.unlock();
             delete article;
-            _job->_error(_job->_encryptionError);
+            _job->_error(encryptionError);
             _job->_stopPosting = 0x1;
             _job->_noMoreFiles = 0x1;
             // onStopPosting performs teardown queued onto PostingJob's thread

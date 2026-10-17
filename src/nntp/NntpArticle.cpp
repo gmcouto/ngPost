@@ -31,6 +31,7 @@ ushort NntpArticle::sNbMaxTrySending = 5;
 NntpArticle::NntpArticle(NntpFile *file, uint part, qint64 pos, qint64 bytes,
                          const std::string *from, bool obfuscation, quint32 segmentIndex):
     _nntpFile(file), _part(part), _segmentIndex(segmentIndex),
+    _encrypted(false),
     _id(QUuid::createUuid()),
     _from(from),
     _subject(nullptr),
@@ -87,6 +88,7 @@ bool NntpArticle::yEncBody(const char data[], const YencEncryptionContext *encry
                             QByteArray::fromStdString(_nntpFile->fileName()), *encryption,
                             block, crc32, error))
         return false;
+    _encrypted = true;
     block += QByteArrayLiteral(".\r\n");
     _bodySize = block.size();
     _body = new char[block.size() + 1];
@@ -147,7 +149,7 @@ bool NntpArticle::tryResend()
 void NntpArticle::write(NntpConnection *con, const std::string &idSignature)
 {
     ++_nbTrySending;
-    if(_segmentIndex == 0)
+    if(!_encrypted)
     {
         con->write(header(idSignature).c_str());
         con->write(_body);
@@ -187,7 +189,7 @@ void NntpArticle::dumpToFile(const QString &path, const std::string &articleIdSi
         return;
     }
 
-    if(_segmentIndex == 0)
+    if(!_encrypted)
     {
         file.write(header(articleIdSignature).c_str());
         file.write(_body);

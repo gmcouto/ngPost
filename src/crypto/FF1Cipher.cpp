@@ -441,20 +441,22 @@ bool FF1Cipher::encryptLine(const QByteArray &plaintext, const QByteArray &maste
         setError(error, QStringLiteral("segmentIndex and lineIndex must be non-zero"));
         return false;
     }
-    if(lineIndex == 1)
+    // Salt is validated unconditionally, not only on the Line 1 path:
+    // encryptLine is public, and a caller encrypting a later line with a
+    // malformed salt must not silently produce wire bytes for an upload
+    // whose Line 1 could never carry that salt. The salt itself is still
+    // only prepended on Line 1, so valid calls are byte-identical.
+    if(salt.size() != SaltSize)
     {
-        if(salt.size() != SaltSize)
+        setError(error, QStringLiteral("Salt must be exactly 16 bytes"));
+        return false;
+    }
+    for(char value : salt)
+    {
+        if(!isAlphabetByte(static_cast<uchar>(value)))
         {
-            setError(error, QStringLiteral("Line 1 salt must be exactly 16 bytes"));
+            setError(error, QStringLiteral("Salt contains a byte outside the Radix 253 alphabet"));
             return false;
-        }
-        for(char value : salt)
-        {
-            if(!isAlphabetByte(static_cast<uchar>(value)))
-            {
-                setError(error, QStringLiteral("Line 1 salt contains a byte outside the Radix 253 alphabet"));
-                return false;
-            }
         }
     }
 
