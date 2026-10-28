@@ -529,20 +529,25 @@ void CryptoTest::encryptControlLinesDotStuffsLeadingDot()
             + QByteArrayLiteral("data\r\n=yend size=4\r\n");
 
     // Pinned deterministic case (found by the same search, then frozen):
-    // segmentIndex 22 makes the =yend control line's FF1 ciphertext start
-    // with '.' (0x2E). Pin it explicitly so the leading-dot case is
-    // exercised by construction, not only if the search below happens to
-    // find one; the search remains as a cross-check over other indices.
+    // segmentIndex 511 at lineIndex 4 makes the =yend control line's FF1
+    // ciphertext start with '.' (0x2E; ciphertext begins 2e6c3c6f...). Pin
+    // it explicitly so the leading-dot case is exercised by construction,
+    // not only if the search below happens to find one; the search remains
+    // as a cross-check over other indices. (An earlier pin used segmentIndex
+    // 22, which no longer yields a '.'-initial ciphertext with the current
+    // FF1 tweak derivation; the search below only covers lineIndex 1..3 for
+    // the first three lines of the block, so the =yend/lineIndex-4 case is
+    // pinned here instead of searched.)
     {
         QByteArray raw;
-        QVERIFY2(FF1Cipher::encryptLine(QByteArrayLiteral("=yend size=4"), masterKey, 22,
+        QVERIFY2(FF1Cipher::encryptLine(QByteArrayLiteral("=yend size=4"), masterKey, 511,
                                         4, salt, raw, &error),
                  qPrintable(error));
         QVERIFY2(raw.startsWith('.'),
-                 qPrintable(QStringLiteral("pinned segmentIndex 22 =yend ciphertext no longer "
+                 qPrintable(QStringLiteral("pinned segmentIndex 511 =yend ciphertext no longer "
                                            "starts with '.': %1").arg(QString::fromLatin1(raw.left(8).toHex()))));
         QByteArray wire;
-        QVERIFY2(FF1Cipher::encryptControlLines(plainBlock, masterKey, 22, salt, wire, &error),
+        QVERIFY2(FF1Cipher::encryptControlLines(plainBlock, masterKey, 511, salt, wire, &error),
                  qPrintable(error));
         QVERIFY2(wire.contains(QByteArrayLiteral("..") + raw.mid(1)),
                  "wire does not contain the dot-stuffed '..' form of the '.'-initial =yend ciphertext");
