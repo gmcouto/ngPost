@@ -147,6 +147,8 @@ v1.2 "yEnc Body and Control Lines Encryption Standards":
 XChaCha20-Poly1305 for bodies, FF1 (NIST SP 800-38G) for control lines. See the standards
 for the wire format (bootstrap prefix, `=yencryption` header, NZB metadata).
 
+*Heads up:* Encrypted posts need a downloader that supports this encryption too. With an ordinary downloader, people won't be able to download or decrypt them properly.
+
 #### Command-line usage
 
 Enable encryption with `--encrypt` and provide a non-empty password via `--encrypt-password`
